@@ -25,6 +25,54 @@ const BARS = Array.from({ length: 48 }, (_, i) => ({
   lit: i % 3 !== 0,
 }));
 
+// theme tokens — dark / light
+const T = {
+  dark: {
+    root:        'bg-black text-white',
+    nav:         'bg-black border-white/10',
+    divider:     'bg-white/5',
+    panel:       'bg-black',
+    label:       'text-white/30',
+    muted:       'text-white/20',
+    sub:         'text-white/40',
+    bar:         'bg-white/10',
+    barFill:     'bg-white',
+    barLit:      'bg-white/20',
+    barDim:      'bg-white/5',
+    tagBorder:   'border-white/10 text-white/40',
+    tagActive:   'border-white/40 text-white',
+    tabActive:   'text-white border-white',
+    tabInactive: 'text-white/30 border-transparent hover:text-white/60',
+    tabBorder:   'border-white/10',
+    totalCard:   'border-white/8',
+    qrBox:       'border-white/10 text-white/20',
+    dot:         'bg-white border-black',
+    toggle:      'bg-white/10 text-white/60 hover:text-white',
+  },
+  light: {
+    root:        'bg-white text-black',
+    nav:         'bg-white border-black/10',
+    divider:     'bg-black/5',
+    panel:       'bg-white',
+    label:       'text-black/40',
+    muted:       'text-black/25',
+    sub:         'text-black/50',
+    bar:         'bg-black/10',
+    barFill:     'bg-black',
+    barLit:      'bg-black/20',
+    barDim:      'bg-black/6',
+    tagBorder:   'border-black/15 text-black/50',
+    tagActive:   'border-black/50 text-black',
+    tabActive:   'text-black border-black',
+    tabInactive: 'text-black/30 border-transparent hover:text-black/60',
+    tabBorder:   'border-black/10',
+    totalCard:   'border-black/10',
+    qrBox:       'border-black/10 text-black/25',
+    dot:         'bg-black border-white',
+    toggle:      'bg-black/6 text-black/50 hover:text-black',
+  },
+};
+
 export default function SpeakerDashboard() {
   const params = useParams();
   const sessionId = params?.sessionId as string;
@@ -33,9 +81,10 @@ export default function SpeakerDashboard() {
   const [tab, setTab] = useState<Tab>('ai');
   const [mic, setMic] = useState(false);
   const [aiOn, setAiOn] = useState(true);
-  const counts = { confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 };
-  const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const max = Math.max(...Object.values(counts), 1);
+  const [dark, setDark] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -44,39 +93,54 @@ export default function SpeakerDashboard() {
       .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
   }, [sessionId]);
 
+  const t = dark ? T.dark : T.light;
+  const counts = { confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 };
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  const max = Math.max(...Object.values(counts), 1);
+
+  if (!mounted) return null;
+
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col select-none">
+    <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${t.root}`}>
 
       {/* Nav */}
-      <nav className="h-12 border-b border-white/10 flex items-center justify-between px-6 shrink-0">
+      <nav className={`h-12 border-b flex items-center justify-between px-6 shrink-0 ${t.nav}`}>
         <div className="flex items-center gap-4">
           <span className="text-sm font-semibold tracking-tight">PULSE</span>
-          <span className="text-xs text-white/30">Speaker</span>
+          <span className={`text-xs ${t.label}`}>Speaker</span>
         </div>
         <div className="flex items-center gap-2">
-          <Tag>0 audience</Tag>
+          <Tag t={t}>0 audience</Tag>
           <button onClick={() => setMic(v => !v)}>
-            <Tag active={mic}>Mic {mic ? 'on' : 'off'}</Tag>
+            <Tag t={t} active={mic}>Mic {mic ? 'on' : 'off'}</Tag>
           </button>
           <button onClick={() => setAiOn(v => !v)}>
-            <Tag active={aiOn}>AI {aiOn ? 'on' : 'paused'}</Tag>
+            <Tag t={t} active={aiOn}>AI {aiOn ? 'on' : 'paused'}</Tag>
           </button>
-          <span className="text-xs text-white/20 font-mono ml-2">{sessionId}</span>
+          <span className={`text-xs font-mono ml-2 ${t.muted}`}>{sessionId}</span>
+
+          {/* Theme toggle */}
+          <button
+            onClick={() => setDark(v => !v)}
+            className={`ml-2 px-3 py-1 text-xs rounded-full border transition-colors ${t.toggle} ${dark ? 'border-white/10' : 'border-black/10'}`}
+          >
+            {dark ? 'Light' : 'Dark'}
+          </button>
         </div>
       </nav>
 
       {/* Layout */}
-      <div className="flex flex-1 gap-px bg-white/5 overflow-hidden">
+      <div className={`flex flex-1 gap-px overflow-hidden ${t.divider}`}>
 
         {/* Left */}
-        <div className="w-72 shrink-0 bg-black flex flex-col gap-px">
+        <div className={`w-72 shrink-0 flex flex-col gap-px ${t.panel}`}>
 
           {/* Pulse */}
-          <Panel className="flex-none">
-            <SectionLabel>Room Pulse</SectionLabel>
+          <div className={`p-5 flex-none ${t.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Room Pulse</p>
             <div className="flex flex-col items-center py-6 gap-1">
               <span className="text-5xl font-bold tabular-nums">{total}</span>
-              <span className="text-xs text-white/30 uppercase tracking-widest">signals</span>
+              <span className={`text-xs uppercase tracking-widest ${t.label}`}>signals</span>
             </div>
             <div className="flex flex-col gap-3 mt-2">
               {SIGNAL_TYPES.map(s => {
@@ -84,120 +148,112 @@ export default function SpeakerDashboard() {
                 const pct = (c / max) * 100;
                 return (
                   <div key={s.key} className="flex items-center gap-3">
-                    <span className="text-xs text-white/40 w-20">{s.label}</span>
-                    <div className="flex-1 h-px bg-white/10 relative">
-                      <div className="absolute inset-y-0 left-0 bg-white transition-all duration-500" style={{ width: `${pct}%`, height: '1px' }} />
+                    <span className={`text-xs w-20 ${t.sub}`}>{s.label}</span>
+                    <div className={`flex-1 h-px relative ${t.bar}`}>
+                      <div className={`absolute inset-y-0 left-0 transition-all duration-500 ${t.barFill}`} style={{ width: `${pct}%`, height: '1px' }} />
                     </div>
-                    <span className="text-xs font-mono text-white/50 w-4 text-right">{c}</span>
+                    <span className={`text-xs font-mono w-4 text-right ${t.sub}`}>{c}</span>
                   </div>
                 );
               })}
             </div>
-          </Panel>
+          </div>
 
           {/* QR */}
-          <Panel className="flex-none">
-            <SectionLabel>Join</SectionLabel>
-            <div className="flex flex-col items-center gap-3 py-2">
-              <div className="w-28 h-28 border border-white/10 flex items-center justify-center text-white/20 text-xs">
+          <div className={`p-5 flex-none ${t.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Join</p>
+            <div className="flex flex-col items-center gap-3 py-2 mt-2">
+              <div className={`w-28 h-28 border flex items-center justify-center text-xs ${t.qrBox}`}>
                 QR
               </div>
-              <span className="text-[11px] text-white/20 font-mono text-center break-all">
+              <span className={`text-[11px] font-mono text-center break-all ${t.muted}`}>
                 /audience/{sessionId}
               </span>
             </div>
-          </Panel>
+          </div>
 
           {/* Mood */}
-          <Panel className="flex-1">
-            <SectionLabel>Mood</SectionLabel>
-            <div className="flex items-center justify-center h-24 text-xs text-white/20">
+          <div className={`p-5 flex-1 ${t.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Mood</p>
+            <div className={`flex items-center justify-center h-24 text-xs ${t.muted}`}>
               No data yet
             </div>
-          </Panel>
+          </div>
         </div>
 
         {/* Right */}
-        <div className="flex-1 bg-black flex flex-col gap-px min-w-0">
+        <div className={`flex-1 flex flex-col gap-px min-w-0 ${t.panel}`}>
 
           {/* Session info + pace */}
-          <Panel className="flex-none">
+          <div className={`p-5 flex-none ${t.panel}`}>
             <div className="flex items-start justify-between gap-6">
               <div>
-                <SectionLabel>Presenting</SectionLabel>
+                <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Presenting</p>
                 <h1 className="text-xl font-semibold mt-1 leading-tight">
                   {session?.topic ?? '—'}
                 </h1>
-                <p className="text-sm text-white/40 mt-1">
-                  {session?.speakerName ?? '—'}
-                </p>
+                <p className={`text-sm mt-1 ${t.sub}`}>{session?.speakerName ?? '—'}</p>
               </div>
-              <div className="text-xs text-white/20 shrink-0 pt-1">Waiting</div>
+              <div className={`text-xs shrink-0 pt-1 ${t.muted}`}>Waiting</div>
             </div>
             <div className="mt-5">
-              <SectionLabel>Pace</SectionLabel>
+              <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Pace</p>
               <div className="flex items-center gap-3 mt-2">
-                <span className="text-xs text-white/30 w-16">Too slow</span>
-                <div className="flex-1 relative h-px bg-white/10">
-                  <div className="absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-white border border-black" style={{ left: '50%', transform: 'translate(-50%,-50%)' }} />
+                <span className={`text-xs w-16 ${t.muted}`}>Too slow</span>
+                <div className={`flex-1 relative h-px ${t.bar}`}>
+                  <div className={`absolute top-1/2 w-2 h-2 rounded-full ${t.dot}`} style={{ left: '50%', transform: 'translate(-50%,-50%)' }} />
                 </div>
-                <span className="text-xs text-white/30 w-16 text-right">Too fast</span>
+                <span className={`text-xs w-16 text-right ${t.muted}`}>Too fast</span>
               </div>
-              <p className="text-xs text-white/20 text-center mt-2">Not enough signal</p>
+              <p className={`text-xs text-center mt-2 ${t.muted}`}>Not enough signal</p>
             </div>
-          </Panel>
+          </div>
 
           {/* Timeline */}
-          <Panel className="flex-none">
-            <SectionLabel>Engagement</SectionLabel>
+          <div className={`p-5 flex-none ${t.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Engagement</p>
             <div className="flex items-end gap-px h-16 mt-3">
               {BARS.map((b, i) => (
-                <div
-                  key={i}
-                  className={`flex-1 ${b.lit ? 'bg-white/20' : 'bg-white/5'}`}
-                  style={{ height: `${b.h}%` }}
-                />
+                <div key={i} className={`flex-1 ${b.lit ? t.barLit : t.barDim}`} style={{ height: `${b.h}%` }} />
               ))}
             </div>
-          </Panel>
+          </div>
 
           {/* Tabs */}
-          <Panel className="flex-1 flex flex-col !pb-0 !px-0">
-            <div className="flex border-b border-white/10 px-5">
-              {TABS.map(t => (
+          <div className={`flex-1 flex flex-col ${t.panel}`}>
+            <div className={`flex border-b px-5 ${t.tabBorder}`}>
+              {TABS.map(t2 => (
                 <button
-                  key={t.id}
-                  onClick={() => setTab(t.id)}
-                  className={`px-4 py-3 text-sm transition-colors border-b -mb-px ${
-                    tab === t.id
-                      ? 'text-white border-white'
-                      : 'text-white/30 border-transparent hover:text-white/60'
-                  }`}
+                  key={t2.id}
+                  onClick={() => setTab(t2.id)}
+                  className={`px-4 py-3 text-sm transition-colors border-b -mb-px ${tab === t2.id ? t.tabActive : t.tabInactive}`}
                 >
-                  {t.label}
+                  {t2.label}
                 </button>
               ))}
             </div>
             <div className="flex-1 flex items-center justify-center p-6">
-              {tab === 'ai' && <Empty text="Watching the room. Will intervene when needed." />}
-              {tab === 'questions' && <Empty text="No questions yet." />}
-              {tab === 'clarify' && <Empty text="Generate clarifying questions to broadcast." />}
-              {tab === 'poll' && <Empty text="Launch a poll to get instant audience feedback." />}
+              <p className={`text-sm text-center max-w-xs ${t.muted}`}>
+                {tab === 'ai'        && 'Watching the room. Will intervene when needed.'}
+                {tab === 'questions' && 'No questions yet.'}
+                {tab === 'clarify'   && 'Generate clarifying questions to broadcast.'}
+                {tab === 'poll'      && 'Launch a poll to get instant audience feedback.'}
+              </p>
             </div>
-          </Panel>
+          </div>
 
-          {/* Signal totals */}
-          <Panel className="flex-none">
-            <SectionLabel>Totals</SectionLabel>
+          {/* Totals */}
+          <div className={`p-5 flex-none ${t.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Totals</p>
             <div className="grid grid-cols-5 gap-3 mt-3">
               {SIGNAL_TYPES.map(s => (
-                <div key={s.key} className="flex flex-col items-center gap-1 border border-white/8 py-4">
+                <div key={s.key} className={`flex flex-col items-center gap-1 border py-4 ${t.totalCard}`}>
                   <span className="text-2xl font-bold tabular-nums">{counts[s.key]}</span>
-                  <span className="text-[11px] text-white/30">{s.label}</span>
+                  <span className={`text-[11px] ${t.label}`}>{s.label}</span>
                 </div>
               ))}
             </div>
-          </Panel>
+          </div>
 
         </div>
       </div>
@@ -205,22 +261,10 @@ export default function SpeakerDashboard() {
   );
 }
 
-function Panel({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={`p-5 ${className}`}>{children}</div>;
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-[11px] uppercase tracking-widest text-white/30 font-medium">{children}</p>;
-}
-
-function Tag({ children, active }: { children: React.ReactNode; active?: boolean }) {
+function Tag({ children, active, t }: { children: React.ReactNode; active?: boolean; t: typeof T.dark }) {
   return (
-    <span className={`px-3 py-1 text-xs border rounded-full transition-colors ${active ? 'border-white/40 text-white' : 'border-white/10 text-white/40'}`}>
+    <span className={`px-3 py-1 text-xs border rounded-full transition-colors ${active ? t.tagActive : t.tagBorder}`}>
       {children}
     </span>
   );
-}
-
-function Empty({ text }: { text: string }) {
-  return <p className="text-sm text-white/20 text-center max-w-xs">{text}</p>;
 }
