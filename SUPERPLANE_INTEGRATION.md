@@ -108,7 +108,3 @@ When a run starts, the flow should insert an `intervention` row with `status: pe
 2. Update `spacetime` reducer schema to accept `superplaneRunId` and `status`.
 3. Update the speaker UI to play audio when `artifact` exists (no-op for stub).
 4. Iterate to add Gemini, policy engine, and TTS flows.
-
----
-
-If you'd like, I can now implement the PoC files (`lib/superplane.ts`, `app/api/intervene/route.ts`) and the reducer schema change — say the word and I'll apply the patch.
