@@ -3,122 +3,157 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 
-// --- Types ---
-type Signal = { type: 'confused' | 'clear' | 'question' | 'excited' | 'slow_down'; count: number; emoji: string; color: string };
+type Signal = { type: 'confused' | 'clear' | 'question' | 'excited' | 'slow_down'; count: number; emoji: string; bar: string };
 type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
 
 const SIGNALS: Signal[] = [
-  { type: 'confused',  count: 0, emoji: '😕', color: 'text-yellow-400' },
-  { type: 'clear',     count: 0, emoji: '✅', color: 'text-green-400'  },
-  { type: 'question',  count: 0, emoji: '❓', color: 'text-blue-400'   },
-  { type: 'excited',   count: 0, emoji: '🔥', color: 'text-orange-400' },
-  { type: 'slow_down', count: 0, emoji: '🐢', color: 'text-teal-400'   },
+  { type: 'confused',  count: 0, emoji: '😕', bar: 'bg-yellow-400' },
+  { type: 'clear',     count: 0, emoji: '✅', bar: 'bg-green-400'  },
+  { type: 'question',  count: 0, emoji: '❓', bar: 'bg-cyan-400'   },
+  { type: 'excited',   count: 0, emoji: '🔥', bar: 'bg-orange-400' },
+  { type: 'slow_down', count: 0, emoji: '🐢', bar: 'bg-lime-400'   },
 ];
 
-// --- Sub-components ---
-
-function StatPill({ label, value, active }: { label: string; value: string | number; active?: boolean }) {
+// ── shared card shell ──────────────────────────────────────────────────────────
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border ${active ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' : 'border-zinc-700 bg-zinc-800/60 text-zinc-400'}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${active ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`} />
-      {label}: <span className="text-zinc-200 font-semibold">{value}</span>
+    <div className={`rounded-2xl border border-green-800/40 p-5 ${className}`} style={{ background: '#111f11' }}>
+      {children}
     </div>
   );
 }
 
-function SignalBar({ emoji, label, count, color, max }: { emoji: string; label: string; count: number; color: string; max: number }) {
-  const pct = max > 0 ? (count / max) * 100 : 0;
+function Label({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-4 text-center">{emoji}</span>
-      <span className="w-20 text-zinc-400 capitalize">{label.replace('_', ' ')}</span>
-      <div className="flex-1 h-1.5 rounded-full bg-zinc-800 overflow-hidden">
-        <div className="h-full rounded-full bg-zinc-500 transition-all duration-500" style={{ width: `${pct}%` }} />
-      </div>
-      <span className={`w-4 text-right font-mono font-semibold ${color}`}>{count}</span>
+    <p className="text-xs uppercase tracking-[0.2em] text-green-700 font-mono font-semibold mb-3">
+      {children}
+    </p>
+  );
+}
+
+// ── top-bar pill ───────────────────────────────────────────────────────────────
+function Pill({ children, glow }: { children: React.ReactNode; glow?: boolean }) {
+  return (
+    <div className={`flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-mono border ${glow ? 'border-green-500/50 text-green-300 shadow-[0_0_12px_rgba(74,222,128,0.2)]' : 'border-green-800/50 text-green-600'}`} style={{ background: glow ? 'rgba(20,50,20,0.9)' : 'rgba(15,30,15,0.9)' }}>
+      {children}
     </div>
   );
 }
 
+// ── pulse circle ──────────────────────────────────────────────────────────────
 function PulseCircle({ total }: { total: number }) {
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="relative flex items-center justify-center w-28 h-28">
-        <div className="absolute inset-0 rounded-full border-2 border-zinc-700" />
-        <div className="absolute inset-2 rounded-full border border-zinc-600/50" />
-        {total > 0 && <div className="absolute inset-0 rounded-full border-2 border-emerald-500/30 animate-ping" />}
-        <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center gap-3">
+      <div className="relative flex items-center justify-center w-36 h-36">
+        <div className="absolute inset-0 rounded-full border-2 border-green-900/60" />
+        <div className="absolute inset-3 rounded-full border border-green-900/40" />
+        <div className="absolute inset-6 rounded-full border border-green-900/20" />
+        {total > 0 && (
+          <>
+            <div className="absolute inset-0 rounded-full border-2 border-green-400/20 animate-ping" />
+            <div className="absolute inset-0 rounded-full shadow-[0_0_30px_rgba(74,222,128,0.15)]" />
+          </>
+        )}
+        <div className="flex flex-col items-center z-10">
           {total === 0
-            ? <span className="text-3xl">⏳</span>
-            : <span className="text-2xl font-bold text-zinc-100">{total}</span>
+            ? <span className="text-4xl">⏳</span>
+            : <span className="text-4xl font-bold font-mono text-green-300" style={{ textShadow: '0 0 20px rgba(74,222,128,0.6)' }}>{total}</span>
           }
-          <span className="text-[10px] text-zinc-500 mt-0.5">{total === 1 ? 'signal' : 'signals'}</span>
+          <span className="text-xs text-green-700 font-mono mt-1">{total === 1 ? 'signal' : 'signals'}</span>
         </div>
       </div>
-      <p className="text-xs text-zinc-500">{total === 0 ? 'Waiting for audience…' : 'Live signals'}</p>
+      <p className="text-sm text-green-700 font-mono">{total === 0 ? 'waiting for audience...' : '// live'}</p>
     </div>
   );
 }
 
-function EngagementTimeline() {
+// ── signal bar ────────────────────────────────────────────────────────────────
+function SignalBar({ emoji, label, count, bar, max }: { emoji: string; label: string; count: number; bar: string; max: number }) {
+  const pct = max > 0 ? (count / max) * 100 : 0;
   return (
-    <div className="flex flex-col gap-1">
-      <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium">Engagement Timeline</p>
-      <div className="h-16 flex items-end gap-px">
-        {Array.from({ length: 40 }).map((_, i) => (
-          <div key={i} className="flex-1 rounded-sm bg-zinc-800" style={{ height: `${Math.random() * 40 + 10}%`, opacity: 0.4 }} />
-        ))}
+    <div className="flex items-center gap-3 text-sm">
+      <span className="w-5 text-center text-base">{emoji}</span>
+      <span className="w-24 text-green-600 font-mono capitalize">{label.replace('_', ' ')}</span>
+      <div className="flex-1 h-2 rounded-full overflow-hidden border border-green-800/40" style={{ background: '#0a1a0a' }}>
+        <div className={`h-full rounded-full ${bar} transition-all duration-700 opacity-80`} style={{ width: `${pct}%`, boxShadow: pct > 0 ? '0 0 8px currentColor' : 'none' }} />
       </div>
-      <p className="text-[10px] text-zinc-600 text-center">Waiting to build as signals come in…</p>
+      <span className="w-6 text-right font-mono font-bold text-green-300">{count}</span>
     </div>
   );
 }
 
+// ── pace meter ────────────────────────────────────────────────────────────────
 function PaceMeter() {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex justify-between text-[10px] text-zinc-600">
-        <span>Too slow</span>
-        <span className="text-zinc-400 font-medium">⚡ Waiting</span>
-        <span>Too fast</span>
+    <div className="flex flex-col gap-2">
+      <div className="flex justify-between text-xs font-mono text-green-800">
+        <span>too slow</span>
+        <span className="text-green-500">⚡ waiting</span>
+        <span>too fast</span>
       </div>
-      <div className="relative h-2 rounded-full bg-gradient-to-r from-blue-600 via-emerald-500 to-red-500">
-        <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white border-2 border-zinc-900 shadow-lg transition-all duration-500" style={{ left: '50%', transform: 'translate(-50%, -50%)' }} />
+      <div className="relative h-2.5 rounded-full overflow-hidden border border-green-800/40" style={{ background: '#0a1a0a' }}>
+        <div className="absolute inset-0 bg-gradient-to-r from-cyan-600 via-green-400 to-red-500 opacity-60" />
+        <div className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-green-300 border-2 border-black shadow-[0_0_10px_rgba(74,222,128,0.8)] transition-all duration-500" style={{ left: '50%', transform: 'translate(-50%,-50%)' }} />
       </div>
-      <p className="text-[10px] text-zinc-600 text-center">No enough signal yet</p>
+      <p className="text-xs text-green-800 font-mono text-center">not enough signal yet</p>
     </div>
   );
 }
 
+// ── engagement timeline ───────────────────────────────────────────────────────
+function EngagementTimeline() {
+  // fixed bars to avoid SSR/client Math.random() mismatch
+  const bars = Array.from({ length: 48 }, (_, i) => ({
+    h: ((i * 37 + 13) % 50) + 8,
+    green: i % 3 !== 0,
+  }));
+  return (
+    <div className="flex flex-col gap-2">
+      <Label>Engagement Timeline</Label>
+      <div className="h-20 flex items-end gap-px">
+        {bars.map((b, i) => (
+          <div
+            key={i}
+            className={`flex-1 rounded-sm transition-all ${b.green ? 'bg-green-500/40' : 'bg-green-800/25'}`}
+            style={{ height: `${b.h}%` }}
+          />
+        ))}
+      </div>
+      <p className="text-xs text-green-800 font-mono text-center">// builds as signals arrive</p>
+    </div>
+  );
+}
+
+// ── tab panel ─────────────────────────────────────────────────────────────────
 function TabPanel({ active, tab, children }: { active: Tab; tab: Tab; children: React.ReactNode }) {
   return active === tab ? <>{children}</> : null;
 }
 
 function EmptyState({ emoji, text }: { emoji: string; text: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-10 text-zinc-600">
-      <span className="text-3xl">{emoji}</span>
-      <p className="text-xs text-center max-w-[180px]">{text}</p>
+    <div className="flex flex-col items-center justify-center gap-3 py-12 text-green-800">
+      <span className="text-4xl opacity-60">{emoji}</span>
+      <p className="text-sm font-mono text-center max-w-[220px] leading-relaxed">{text}</p>
     </div>
   );
 }
 
+// ── signal totals grid ────────────────────────────────────────────────────────
 function SignalTotals({ signals }: { signals: Signal[] }) {
   return (
-    <div className="grid grid-cols-5 gap-2">
+    <div className="grid grid-cols-5 gap-3">
       {signals.map(s => (
-        <div key={s.type} className="flex flex-col items-center gap-1 rounded-xl bg-zinc-800/60 border border-zinc-700/50 py-3">
-          <span className="text-xl">{s.emoji}</span>
-          <span className={`text-lg font-bold font-mono ${s.color}`}>{s.count}</span>
-          <span className="text-[10px] text-zinc-500 capitalize">{s.type.replace('_', ' ')}</span>
+        <div key={s.type} className="flex flex-col items-center gap-1.5 rounded-xl border border-green-800/40 py-4 hover:border-green-600/50 transition-colors" style={{ background: '#0e1e0e' }}>
+          <span className="text-2xl">{s.emoji}</span>
+          <span className="text-2xl font-bold font-mono text-green-300" style={{ textShadow: s.count > 0 ? '0 0 12px rgba(74,222,128,0.5)' : 'none' }}>{s.count}</span>
+          <span className="text-xs text-green-700 font-mono capitalize">{s.type.replace('_', ' ')}</span>
         </div>
       ))}
     </div>
   );
 }
 
-// --- Main Dashboard ---
-
+// ── main ──────────────────────────────────────────────────────────────────────
 export default function SpeakerDashboard() {
   const params = useParams();
   const sessionId = params?.sessionId as string;
@@ -147,136 +182,148 @@ export default function SpeakerDashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans">
+    <div className="min-h-screen flex flex-col font-mono bg-[#0d1f0d] text-[#86efac]">
+
+      {/* scanline overlay */}
+      <div suppressHydrationWarning className="pointer-events-none fixed inset-0 z-50 opacity-[0.025]" style={{ backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.5) 2px, rgba(0,255,0,0.5) 4px)' }} />
 
       {/* Top Nav */}
-      <header className="flex items-center justify-between px-5 py-2.5 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-10">
-        <div className="flex items-center gap-2">
-          <span className="text-red-500 font-bold text-sm tracking-tight">❤ PULSE</span>
-          <span className="text-zinc-600 text-xs">Speaker View</span>
+      <header className="flex items-center justify-between px-6 py-3 border-b border-green-800/50 bg-[#0a1a0a]/90 backdrop-blur sticky top-0 z-40">
+        <div className="flex items-center gap-3">
+          <span className="text-green-400 font-bold text-lg tracking-tight" style={{ textShadow: '0 0 16px rgba(74,222,128,0.7)' }}>
+            ❤ PULSE
+          </span>
+          <span className="text-green-800 text-sm">// speaker view</span>
         </div>
         <div className="flex items-center gap-2">
-          <StatPill label="Audience" value={0} />
-          <button
-            onClick={() => setMicOn(v => !v)}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${micOn ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' : 'border-zinc-700 bg-zinc-800/60 text-zinc-400'}`}
-          >
-            🎙 {micOn ? 'On' : 'Off'}
+          <Pill>
+            <span className="h-2 w-2 rounded-full bg-green-700" />
+            audience: <span className="text-green-300 font-bold">0</span>
+          </Pill>
+          <button onClick={() => setMicOn(v => !v)}>
+            <Pill glow={micOn}>
+              🎙 {micOn ? 'mic on' : 'mic off'}
+            </Pill>
           </button>
-          <button
-            onClick={() => setAiPaused(v => !v)}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${!aiPaused ? 'border-yellow-500/40 bg-yellow-500/10 text-yellow-400' : 'border-zinc-700 bg-zinc-800/60 text-zinc-400'}`}
-          >
-            🤖 {aiPaused ? 'Paused' : 'AI on'}
+          <button onClick={() => setAiPaused(v => !v)}>
+            <Pill glow={!aiPaused}>
+              🤖 {aiPaused ? 'ai paused' : 'ai active'}
+            </Pill>
           </button>
-          <div className="rounded-full px-3 py-1 text-xs font-mono bg-zinc-800 border border-zinc-700 text-zinc-400">
+          <div className="rounded-full px-4 py-1.5 text-sm font-mono border border-green-800/50 text-green-700" style={{ background: 'rgba(15,30,15,0.9)' }}>
             {sessionId}
           </div>
         </div>
       </header>
 
       {/* Body */}
-      <div className="flex flex-1 gap-4 p-4 overflow-auto">
+      <div className="flex flex-1 gap-5 p-5 overflow-auto">
 
-        {/* Left Column */}
-        <div className="flex flex-col gap-4 w-[220px] shrink-0">
+        {/* ── Left Column ── */}
+        <div className="flex flex-col gap-5 w-64 shrink-0">
 
           {/* Room Pulse */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 flex flex-col gap-4">
-            <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium">Room Pulse</p>
-            <div className="flex justify-center">
+          <Card>
+            <Label>Room Pulse</Label>
+            <div className="flex justify-center mb-5">
               <PulseCircle total={totalSignals} />
             </div>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3">
               {signals.map(s => (
-                <SignalBar key={s.type} emoji={s.emoji} label={s.type} count={s.count} color={s.color} max={maxSignal} />
+                <SignalBar key={s.type} emoji={s.emoji} label={s.type} count={s.count} bar={s.bar} max={maxSignal} />
               ))}
             </div>
-          </div>
+          </Card>
 
           {/* QR Code */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 flex flex-col gap-3">
-            <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium">Audience QR Code</p>
-            <div className="flex justify-center">
-              <div className="w-24 h-24 rounded-xl bg-white flex items-center justify-center text-zinc-400 text-xs">
+          <Card>
+            <Label>Audience QR Code</Label>
+            <div className="flex justify-center mb-3">
+              <div className="w-28 h-28 rounded-xl border border-green-800/50 flex items-center justify-center text-green-700 text-sm" style={{ background: '#0a1a0a' }}>
                 QR
               </div>
             </div>
-            <p className="text-[10px] text-zinc-600 text-center break-all font-mono">
-              {typeof window !== 'undefined' ? `${window.location.origin}/audience/${sessionId}` : ''}
+            <p className="text-xs text-green-800 text-center break-all leading-relaxed">
+              /audience/{sessionId}
             </p>
-          </div>
+          </Card>
 
           {/* Mood Word Cloud */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 flex flex-col gap-3 flex-1">
-            <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium">Mood Word Cloud</p>
-            <div className="flex flex-col items-center justify-center flex-1 gap-2 py-4">
-              <span className="text-3xl opacity-30">☁️</span>
-              <p className="text-[10px] text-zinc-600 text-center">Mood words appear here after AI interventions</p>
+          <Card className="flex-1">
+            <Label>Mood Word Cloud</Label>
+            <div className="flex flex-col items-center justify-center gap-3 py-6">
+              <span className="text-4xl opacity-20">☁️</span>
+              <p className="text-xs text-green-800 text-center leading-relaxed">
+                // mood words appear after AI interventions
+              </p>
             </div>
-          </div>
+          </Card>
         </div>
 
-        {/* Right Column */}
-        <div className="flex flex-col gap-4 flex-1 min-w-0">
+        {/* ── Right Column ── */}
+        <div className="flex flex-col gap-5 flex-1 min-w-0">
 
           {/* Presenting + Pace */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 flex flex-col gap-3">
-            <div className="flex items-start justify-between gap-4">
+          <Card>
+            <div className="flex items-start justify-between gap-4 mb-4">
               <div>
-                <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium">Presenting</p>
-                <h1 className="text-lg font-semibold text-zinc-100 mt-0.5">{session?.topic ?? '…'}</h1>
-                <p className="text-xs text-zinc-500 mt-0.5">by <span className="text-zinc-300">{session?.speakerName ?? '…'}</span></p>
+                <Label>Presenting</Label>
+                <h1 className="text-2xl font-bold text-green-300 leading-tight" style={{ textShadow: '0 0 20px rgba(74,222,128,0.4)' }}>
+                  {session?.topic ?? '...'}
+                </h1>
+                <p className="text-sm text-green-700 mt-1">
+                  by <span className="text-green-400">{session?.speakerName ?? '...'}</span>
+                </p>
               </div>
-              <div className="text-right text-xs text-zinc-500 shrink-0">
-                <span className="text-zinc-400 font-medium">⚡ Waiting</span>
-              </div>
+              <div className="text-sm text-green-700 shrink-0 pt-1">⚡ waiting</div>
             </div>
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium mb-2">Pace</p>
-              <PaceMeter />
-            </div>
-          </div>
+            <Label>Pace</Label>
+            <PaceMeter />
+          </Card>
 
           {/* Engagement Timeline */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
+          <Card>
             <EngagementTimeline />
-          </div>
+          </Card>
 
           {/* Tabs */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 flex flex-col flex-1">
-            <div className="flex border-b border-zinc-800 px-2 pt-2 gap-1">
+          <Card className="flex flex-col flex-1 !p-0 overflow-hidden">
+            <div className="flex border-b border-green-900/60 px-2 pt-2 gap-1">
               {tabs.map(t => (
                 <button
                   key={t.id}
                   onClick={() => setActiveTab(t.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-xs font-medium transition-colors ${activeTab === t.id ? 'bg-zinc-800 text-zinc-100 border border-b-0 border-zinc-700' : 'text-zinc-500 hover:text-zinc-300'}`}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-t-lg text-sm font-mono font-medium transition-all ${
+                    activeTab === t.id
+                      ? 'text-green-300 border border-b-0 border-green-700/60 shadow-[0_0_12px_rgba(74,222,128,0.1)]'
+                      : 'text-green-800 hover:text-green-600'
+                  }`}
                 >
                   {t.icon} {t.label}
                 </button>
               ))}
             </div>
-            <div className="p-4 flex-1">
+            <div className="p-5 flex-1">
               <TabPanel active={activeTab} tab="ai">
-                <EmptyState emoji="🤖" text="The AI is watching the room. It will speak when the room needs it." />
+                <EmptyState emoji="🤖" text="// the AI is watching the room. it will speak when the room needs it." />
               </TabPanel>
               <TabPanel active={activeTab} tab="questions">
-                <EmptyState emoji="🙋" text="No questions yet. Audience questions will appear here sorted by upvotes." />
+                <EmptyState emoji="🙋" text="// no questions yet. audience questions appear here sorted by upvotes." />
               </TabPanel>
               <TabPanel active={activeTab} tab="clarify">
-                <EmptyState emoji="✨" text="Generate AI clarifying questions to broadcast to the audience." />
+                <EmptyState emoji="✨" text="// generate AI clarifying questions to broadcast to the audience." />
               </TabPanel>
               <TabPanel active={activeTab} tab="poll">
-                <EmptyState emoji="📊" text="Launch a quick poll. Results stream back as a live bar chart." />
+                <EmptyState emoji="📊" text="// launch a quick poll. results stream back as a live bar chart." />
               </TabPanel>
             </div>
-          </div>
+          </Card>
 
           {/* Total Signals */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 flex flex-col gap-3">
-            <p className="text-[10px] uppercase tracking-widest text-zinc-600 font-medium">Total Signals This Session</p>
+          <Card>
+            <Label>Total Signals This Session</Label>
             <SignalTotals signals={signals} />
-          </div>
+          </Card>
 
         </div>
       </div>
