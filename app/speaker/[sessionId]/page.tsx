@@ -3,88 +3,47 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 
-type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
+// Room state distilled to a single ambient signal
+type RoomState = 'good' | 'check' | 'confused' | 'fast' | 'slow';
 
-const SIGNAL_TYPES = [
-  { key: 'confused',  label: 'Confused'  },
-  { key: 'clear',     label: 'Clear'     },
-  { key: 'question',  label: 'Question'  },
-  { key: 'excited',   label: 'Excited'   },
-  { key: 'slow_down', label: 'Slow down' },
-] as const;
+function getRoomState(counts: Record<string, number>): RoomState {
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  if (total < 3) return 'good';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'ai',        label: 'AI'        },
-  { id: 'questions', label: 'Questions' },
-  { id: 'clarify',   label: 'Clarify'   },
-  { id: 'poll',      label: 'Poll'      },
-];
+  const confused   = counts['confused']  ?? 0;
+  const slow_down  = counts['slow_down'] ?? 0;
+  const excited    = counts['excited']   ?? 0;
 
-const BARS = Array.from({ length: 48 }, (_, i) => ({
-  h: ((i * 37 + 13) % 50) + 8,
-  lit: i % 3 !== 0,
-}));
+  const confusionRate = confused / total;
+  if (confusionRate >= 0.4) return 'confused';
 
-// theme tokens — dark / light
-const T = {
-  dark: {
-    root:        'bg-black text-white',
-    nav:         'bg-black border-white/10',
-    divider:     'bg-white/5',
-    panel:       'bg-black',
-    label:       'text-white/30',
-    muted:       'text-white/20',
-    sub:         'text-white/40',
-    bar:         'bg-white/10',
-    barFill:     'bg-white',
-    barLit:      'bg-white/20',
-    barDim:      'bg-white/5',
-    tagBorder:   'border-white/10 text-white/40',
-    tagActive:   'border-white/40 text-white',
-    tabActive:   'text-white border-white',
-    tabInactive: 'text-white/30 border-transparent hover:text-white/60',
-    tabBorder:   'border-white/10',
-    totalCard:   'border-white/8',
-    qrBox:       'border-white/10 text-white/20',
-    dot:         'bg-white border-black',
-    toggle:      'bg-white/10 text-white/60 hover:text-white',
-  },
-  light: {
-    root:        'bg-white text-black',
-    nav:         'bg-white border-black/10',
-    divider:     'bg-black/5',
-    panel:       'bg-white',
-    label:       'text-black/40',
-    muted:       'text-black/25',
-    sub:         'text-black/50',
-    bar:         'bg-black/10',
-    barFill:     'bg-black',
-    barLit:      'bg-black/20',
-    barDim:      'bg-black/6',
-    tagBorder:   'border-black/15 text-black/50',
-    tagActive:   'border-black/50 text-black',
-    tabActive:   'text-black border-black',
-    tabInactive: 'text-black/30 border-transparent hover:text-black/60',
-    tabBorder:   'border-black/10',
-    totalCard:   'border-black/10',
-    qrBox:       'border-black/10 text-black/25',
-    dot:         'bg-black border-white',
-    toggle:      'bg-black/6 text-black/50 hover:text-black',
-  },
+  const paceSignals = slow_down + excited;
+  if (paceSignals >= 3) {
+    const fastRate = slow_down / paceSignals;
+    if (fastRate > 0.65) return 'fast';
+    if (fastRate < 0.35) return 'slow';
+  }
+
+  if (confusionRate >= 0.2) return 'check';
+  return 'good';
+}
+
+const ROOM_CONFIG: Record<RoomState, { color: string; bg: string; ring: string; label: string; sub: string }> = {
+  good:     { color: 'text-emerald-400', bg: 'bg-emerald-400/10', ring: 'ring-emerald-400/30', label: "You're good",        sub: 'Room is with you'          },
+  check:    { color: 'text-yellow-400',  bg: 'bg-yellow-400/10',  ring: 'ring-yellow-400/30',  label: 'Check in',           sub: 'Some confusion building'   },
+  confused: { color: 'text-red-400',     bg: 'bg-red-400/10',     ring: 'ring-red-400/30',     label: 'Pause & clarify',    sub: 'Room is confused'          },
+  fast:     { color: 'text-orange-400',  bg: 'bg-orange-400/10',  ring: 'ring-orange-400/30',  label: 'Slow down',          sub: 'Pace is too fast'          },
+  slow:     { color: 'text-blue-400',    bg: 'bg-blue-400/10',    ring: 'ring-blue-400/30',    label: 'Pick up the pace',   sub: 'Room wants more'           },
 };
 
-export default function SpeakerDashboard() {
-  const params = useParams();
+export default function SpeakerView() {
+  const params    = useParams();
   const sessionId = params?.sessionId as string;
 
-  const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
-  const [tab, setTab] = useState<Tab>('ai');
-  const [mic, setMic] = useState(false);
-  const [aiOn, setAiOn] = useState(true);
-  const [dark, setDark] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
-  const [audienceCount, setAudienceCount] = useState(0);
+  const [session,  setSession]  = useState<{ speakerName: string; topic: string } | null>(null);
+  const [counts,   setCounts]   = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
+  const [mounted,  setMounted]  = useState(false);
+  const [aiMsg,    setAiMsg]    = useState<string | null>(null);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -107,191 +66,57 @@ export default function SpeakerDashboard() {
         } else if (msg.type === 'signal') {
           const key = msg.signal.signalType as string;
           setCounts(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
-          setAudienceCount(prev => prev + 1);
+        } else if (msg.type === 'intervention') {
+          setAiMsg(msg.message ?? null);
+          setTimeout(() => setAiMsg(null), 8000);
         }
       } catch { /* ignore */ }
     };
     return () => es.close();
   }, [sessionId]);
 
-  const t = dark ? T.dark : T.light;
-  const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const max = Math.max(...Object.values(counts), 1);
-
-  // Pace dot: 0% = too slow, 100% = too fast
-  // slow_down from audience → speaker is going too fast → dot moves right
-  // excited from audience → speaker is going too slow → dot moves left
-  const paceSignals = (counts['slow_down'] ?? 0) + (counts['excited'] ?? 0);
-  const pacePct = paceSignals === 0 ? 50 : Math.round(((counts['slow_down'] ?? 0) / paceSignals) * 100);
-  const paceLabel = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
-
   if (!mounted) return null;
 
+  const roomState = getRoomState(counts);
+  const cfg       = ROOM_CONFIG[roomState];
+  const total     = Object.values(counts).reduce((a, b) => a + b, 0);
+
   return (
-    <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${t.root}`}>
+    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center select-none">
 
-      {/* Nav */}
-      <nav className={`h-12 border-b flex items-center justify-between px-6 shrink-0 ${t.nav}`}>
+      {/* Minimal header */}
+      <div className="absolute top-0 left-0 right-0 h-12 flex items-center justify-between px-6 border-b border-white/8">
+        <span className="text-sm font-semibold tracking-tight">PULSE</span>
         <div className="flex items-center gap-4">
-          <span className="text-sm font-semibold tracking-tight">PULSE</span>
-          <span className={`text-xs ${t.label}`}>Speaker</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Tag t={t}>{audienceCount > 0 ? `${audienceCount} signals` : '0 audience'}</Tag>
-          <button onClick={() => setMic(v => !v)}>
-            <Tag t={t} active={mic}>Mic {mic ? 'on' : 'off'}</Tag>
-          </button>
-          <button onClick={() => setAiOn(v => !v)}>
-            <Tag t={t} active={aiOn}>AI {aiOn ? 'on' : 'paused'}</Tag>
-          </button>
-          <span className={`text-xs font-mono ml-2 ${t.muted}`}>{sessionId}</span>
-
-          {/* Theme toggle */}
-          <button
-            onClick={() => setDark(v => !v)}
-            className={`ml-2 px-3 py-1 text-xs rounded-full border transition-colors ${t.toggle} ${dark ? 'border-white/10' : 'border-black/10'}`}
-          >
-            {dark ? 'Light' : 'Dark'}
-          </button>
-        </div>
-      </nav>
-
-      {/* Layout */}
-      <div className={`flex flex-1 gap-px overflow-hidden ${t.divider}`}>
-
-        {/* Left */}
-        <div className={`w-72 shrink-0 flex flex-col gap-px ${t.panel}`}>
-
-          {/* Pulse */}
-          <div className={`p-5 flex-none ${t.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Room Pulse</p>
-            <div className="flex flex-col items-center py-6 gap-1">
-              <span className="text-5xl font-bold tabular-nums">{total}</span>
-              <span className={`text-xs uppercase tracking-widest ${t.label}`}>signals</span>
-            </div>
-            <div className="flex flex-col gap-3 mt-2">
-              {SIGNAL_TYPES.map(s => {
-                const c = counts[s.key];
-                const pct = (c / max) * 100;
-                return (
-                  <div key={s.key} className="flex items-center gap-3">
-                    <span className={`text-xs w-20 ${t.sub}`}>{s.label}</span>
-                    <div className={`flex-1 h-px relative ${t.bar}`}>
-                      <div className={`absolute inset-y-0 left-0 transition-all duration-500 ${t.barFill}`} style={{ width: `${pct}%`, height: '1px' }} />
-                    </div>
-                    <span className={`text-xs font-mono w-4 text-right ${t.sub}`}>{c}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* QR */}
-          <div className={`p-5 flex-none ${t.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Join</p>
-            <div className="flex flex-col items-center gap-3 py-2 mt-2">
-              <div className={`w-28 h-28 border flex items-center justify-center text-xs ${t.qrBox}`}>
-                QR
-              </div>
-              <span className={`text-[11px] font-mono text-center break-all ${t.muted}`}>
-                /audience/{sessionId}
-              </span>
-            </div>
-          </div>
-
-          {/* Mood */}
-          <div className={`p-5 flex-1 ${t.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Mood</p>
-            <div className={`flex items-center justify-center h-24 text-xs ${t.muted}`}>
-              No data yet
-            </div>
-          </div>
-        </div>
-
-        {/* Right */}
-        <div className={`flex-1 flex flex-col gap-px min-w-0 ${t.panel}`}>
-
-          {/* Session info + pace */}
-          <div className={`p-5 flex-none ${t.panel}`}>
-            <div className="flex items-start justify-between gap-6">
-              <div>
-                <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Presenting</p>
-                <h1 className="text-xl font-semibold mt-1 leading-tight">
-                  {session?.topic ?? '—'}
-                </h1>
-                <p className={`text-sm mt-1 ${t.sub}`}>{session?.speakerName ?? '—'}</p>
-              </div>
-              <div className={`text-xs shrink-0 pt-1 ${t.muted}`}>Waiting</div>
-            </div>
-            <div className="mt-5">
-              <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Pace</p>
-              <div className="flex items-center gap-3 mt-2">
-                <span className={`text-xs w-16 ${t.muted}`}>Too slow</span>
-                <div className={`flex-1 relative h-px ${t.bar}`}>
-                  <div className={`absolute top-1/2 w-2 h-2 rounded-full transition-all duration-700 ${t.dot}`} style={{ left: `${pacePct}%`, transform: 'translate(-50%,-50%)' }} />
-                </div>
-                <span className={`text-xs w-16 text-right ${t.muted}`}>Too fast</span>
-              </div>
-              <p className={`text-xs text-center mt-2 ${t.muted}`}>{paceLabel}</p>
-            </div>
-          </div>
-
-          {/* Timeline */}
-          <div className={`p-5 flex-none ${t.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Engagement</p>
-            <div className="flex items-end gap-px h-16 mt-3">
-              {BARS.map((b, i) => (
-                <div key={i} className={`flex-1 ${b.lit ? t.barLit : t.barDim}`} style={{ height: `${b.h}%` }} />
-              ))}
-            </div>
-          </div>
-
-          {/* Tabs */}
-          <div className={`flex-1 flex flex-col ${t.panel}`}>
-            <div className={`flex border-b px-5 ${t.tabBorder}`}>
-              {TABS.map(t2 => (
-                <button
-                  key={t2.id}
-                  onClick={() => setTab(t2.id)}
-                  className={`px-4 py-3 text-sm transition-colors border-b -mb-px ${tab === t2.id ? t.tabActive : t.tabInactive}`}
-                >
-                  {t2.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 flex items-center justify-center p-6">
-              <p className={`text-sm text-center max-w-xs ${t.muted}`}>
-                {tab === 'ai'        && 'Watching the room. Will intervene when needed.'}
-                {tab === 'questions' && 'No questions yet.'}
-                {tab === 'clarify'   && 'Generate clarifying questions to broadcast.'}
-                {tab === 'poll'      && 'Launch a poll to get instant audience feedback.'}
-              </p>
-            </div>
-          </div>
-
-          {/* Totals */}
-          <div className={`p-5 flex-none ${t.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${t.label}`}>Totals</p>
-            <div className="grid grid-cols-5 gap-3 mt-3">
-              {SIGNAL_TYPES.map(s => (
-                <div key={s.key} className={`flex flex-col items-center gap-1 border py-4 ${t.totalCard}`}>
-                  <span className="text-2xl font-bold tabular-nums">{counts[s.key]}</span>
-                  <span className={`text-[11px] ${t.label}`}>{s.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
+          <span className="text-xs text-white/30 font-mono">{session?.topic ?? sessionId}</span>
+          <span className="text-xs text-white/20">{total} signals</span>
         </div>
       </div>
-    </div>
-  );
-}
 
-function Tag({ children, active, t }: { children: React.ReactNode; active?: boolean; t: typeof T.dark }) {
-  return (
-    <span className={`px-3 py-1 text-xs border rounded-full transition-colors ${active ? t.tagActive : t.tagBorder}`}>
-      {children}
-    </span>
+      {/* Single ambient indicator */}
+      <div className="flex flex-col items-center gap-6">
+        <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
+          <div className="flex flex-col items-center gap-1 text-center">
+            <span className={`text-lg font-semibold transition-colors duration-700 ${cfg.color}`}>
+              {cfg.label}
+            </span>
+          </div>
+        </div>
+        <p className="text-sm text-white/30">{cfg.sub}</p>
+
+        {/* AI whisper — appears only when intervention fires */}
+        {aiMsg && (
+          <div className="mt-4 max-w-xs text-center px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-sm text-white/70 animate-fade-in">
+            {aiMsg}
+          </div>
+        )}
+      </div>
+
+      {/* Audience join link — bottom */}
+      <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-1">
+        <span className="text-[11px] text-white/20 uppercase tracking-widest">Audience</span>
+        <span className="text-xs text-white/30 font-mono">/audience/{sessionId}</span>
+      </div>
+    </div>
   );
 }
