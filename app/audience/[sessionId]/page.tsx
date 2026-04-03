@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { getFingerprint } from '@/lib/fingerprint';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,11 @@ export default function AudiencePage() {
   const [sending, setSending] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
+  // floating reactions
+  type Reaction = { id: number; emoji: string; x: number };
+  const [reactions, setReactions] = useState<Reaction[]>([]);
+  const reactionId = useRef(0);
+
   // questions
   const [question, setQuestion] = useState('');
   const [qSending, setQSending] = useState(false);
@@ -42,6 +48,7 @@ export default function AudiencePage() {
   const [qCooldownLeft, setQCooldownLeft] = useState(0);
 
   const audienceId = useRef<string>('');
+  const fingerprint = useRef<string>('');
 
   useEffect(() => {
     // stable per-browser audience ID
@@ -51,6 +58,7 @@ export default function AudiencePage() {
       localStorage.setItem('pulse_audience_id', id);
     }
     audienceId.current = id;
+    getFingerprint().then(fp => { fingerprint.current = fp; });
   }, []);
 
   useEffect(() => {
@@ -70,6 +78,26 @@ export default function AudiencePage() {
     return () => clearInterval(id);
   }, [cooldownUntil, qCooldownUntil]);
 
+  // SSE — floating reactions from other audience members
+  useEffect(() => {
+    if (!sessionId) return;
+    const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'signal') {
+          const sig = SIGNALS.find(s => s.key === msg.signal.signalType);
+          if (!sig) return;
+          const id = ++reactionId.current;
+          const x = 10 + Math.random() * 80; // % from left
+          setReactions(prev => [...prev.slice(-20), { id, emoji: sig.emoji, x }]);
+          setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
+        }
+      } catch { /* ignore */ }
+    };
+    return () => es.close();
+  }, [sessionId]);
+
   async function sendSignal(key: SignalKey) {
     if (Date.now() < cooldownUntil || sending) return;
     setSending(true);
@@ -78,7 +106,7 @@ export default function AudiencePage() {
       await fetch('/api/signals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, signalType: key, audienceId: audienceId.current }),
+        body: JSON.stringify({ sessionId, signalType: key, audienceId: audienceId.current, fingerprint: fingerprint.current }),
       });
       setCooldownUntil(Date.now() + COOLDOWN_MS);
       setFeedback('Sent!');
@@ -137,6 +165,18 @@ export default function AudiencePage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-zinc-50">
+      {/* Floating reactions overlay */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden z-50">
+        {reactions.map(r => (
+          <span
+            key={r.id}
+            className="absolute text-2xl animate-float-up"
+            style={{ left: `${r.x}%`, bottom: '20%' }}
+          >
+            {r.emoji}
+          </span>
+        ))}
+      </div>
       {/* Header */}
       <header className="bg-white border-b border-zinc-200 px-4 py-4">
         <p className="text-xs text-zinc-400 uppercase tracking-widest">Audience</p>
