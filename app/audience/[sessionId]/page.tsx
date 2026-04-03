@@ -1,9 +1,23 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
+
+type Tab = 'react' | 'ask';
+
+const SIGNALS = [
+  { key: 'confused',  emoji: '😕', label: 'Confused'   },
+  { key: 'clear',     emoji: '✅', label: 'Clear'       },
+  { key: 'excited',   emoji: '🔥', label: 'Excited'     },
+  { key: 'slow_down', emoji: '🐢', label: 'Slow down'   },
+  { key: 'question',  emoji: '✋', label: 'Question'    },
+] as const;
+
+type SignalKey = typeof SIGNALS[number]['key'];
+
+const COOLDOWN_MS = 10_000;
 
 export default function AudiencePage() {
   const params = useParams();
@@ -11,46 +25,218 @@ export default function AudiencePage() {
 
   const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [tab, setTab] = useState<Tab>('react');
+
+  // signals
+  const [lastSignal, setLastSignal] = useState<SignalKey | null>(null);
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [cooldownLeft, setCooldownLeft] = useState(0);
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  // questions
+  const [question, setQuestion] = useState('');
+  const [qSending, setQSending] = useState(false);
+  const [qFeedback, setQFeedback] = useState<string | null>(null);
+  const [qCooldownUntil, setQCooldownUntil] = useState(0);
+  const [qCooldownLeft, setQCooldownLeft] = useState(0);
+
+  const audienceId = useRef<string>('');
+
+  useEffect(() => {
+    // stable per-browser audience ID
+    let id = localStorage.getItem('pulse_audience_id');
+    if (!id) {
+      id = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+      localStorage.setItem('pulse_audience_id', id);
+    }
+    audienceId.current = id;
+  }, []);
 
   useEffect(() => {
     if (!sessionId) return;
     fetch(`/api/session?sessionId=${sessionId}`)
-      .then(r => {
-        if (r.status === 404) { setNotFound(true); return null; }
-        return r.json();
-      })
+      .then(r => { if (r.status === 404) { setNotFound(true); return null; } return r.json(); })
       .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
   }, [sessionId]);
 
-  if (notFound) {
-    return (
-      <div className="flex flex-1 items-center justify-center min-h-screen bg-zinc-50 px-4">
-        <div className="text-center">
-          <p className="text-sm text-zinc-500 uppercase tracking-widest mb-2">Session not found</p>
-          <p className="text-xs text-zinc-400">The session may have ended or the link is invalid.</p>
-        </div>
-      </div>
-    );
+  // cooldown ticker
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = Date.now();
+      setCooldownLeft(Math.max(0, Math.ceil((cooldownUntil - now) / 1000)));
+      setQCooldownLeft(Math.max(0, Math.ceil((qCooldownUntil - now) / 1000)));
+    }, 250);
+    return () => clearInterval(id);
+  }, [cooldownUntil, qCooldownUntil]);
+
+  async function sendSignal(key: SignalKey) {
+    if (Date.now() < cooldownUntil || sending) return;
+    setSending(true);
+    setLastSignal(key);
+    try {
+      await fetch('/api/signals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, signalType: key, audienceId: audienceId.current }),
+      });
+      setCooldownUntil(Date.now() + COOLDOWN_MS);
+      setFeedback('Sent!');
+      setTimeout(() => setFeedback(null), 1500);
+    } catch {
+      setFeedback('Failed to send');
+      setTimeout(() => setFeedback(null), 2000);
+    } finally {
+      setSending(false);
+    }
   }
 
-  if (!session) {
-    return (
-      <div className="flex flex-1 items-center justify-center min-h-screen bg-zinc-50 px-4">
-        <p className="text-sm text-zinc-400">Loading…</p>
-      </div>
-    );
+  async function sendQuestion() {
+    const text = question.trim();
+    if (!text || qSending || Date.now() < qCooldownUntil) return;
+    setQSending(true);
+    try {
+      const res = await fetch('/api/questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, text, audienceId: audienceId.current }),
+      });
+      if (res.ok) {
+        setQuestion('');
+        setQCooldownUntil(Date.now() + 30_000);
+        setQFeedback('Question submitted!');
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setQFeedback(d.error ?? 'Failed to submit');
+      }
+    } catch {
+      setQFeedback('Failed to submit');
+    } finally {
+      setQSending(false);
+      setTimeout(() => setQFeedback(null), 3000);
+    }
   }
+
+  if (notFound) return (
+    <div className="flex items-center justify-center min-h-screen bg-zinc-50 px-4">
+      <div className="text-center">
+        <p className="text-sm text-zinc-500 uppercase tracking-widest mb-2">Session not found</p>
+        <p className="text-xs text-zinc-400">The session may have ended or the link is invalid.</p>
+      </div>
+    </div>
+  );
+
+  if (!session) return (
+    <div className="flex items-center justify-center min-h-screen bg-zinc-50 px-4">
+      <p className="text-sm text-zinc-400">Loading…</p>
+    </div>
+  );
+
+  const onCooldown = cooldownLeft > 0;
+  const onQCooldown = qCooldownLeft > 0;
 
   return (
-    <div className="flex flex-1 flex-col min-h-screen bg-zinc-50 px-4 py-10">
-      <main className="w-full max-w-sm mx-auto">
-        <p className="text-xs text-zinc-400 uppercase tracking-widest mb-3">Audience</p>
-        <h1 className="text-2xl font-semibold leading-tight text-zinc-900">{session.topic}</h1>
-        <p className="text-sm text-zinc-500 mt-1">with {session.speakerName}</p>
-        <div className="mt-8 border border-zinc-200 rounded-xl px-4 py-5 text-sm text-zinc-400 bg-white">
-          Signal buttons and questions will appear here in Phase 2.
-        </div>
-      </main>
+    <div className="flex flex-col min-h-screen bg-zinc-50">
+      {/* Header */}
+      <header className="bg-white border-b border-zinc-200 px-4 py-4">
+        <p className="text-xs text-zinc-400 uppercase tracking-widest">Audience</p>
+        <h1 className="text-lg font-semibold text-zinc-900 mt-0.5 leading-tight">{session.topic}</h1>
+        <p className="text-sm text-zinc-500">with {session.speakerName}</p>
+      </header>
+
+      {/* Tabs */}
+      <div className="flex border-b border-zinc-200 bg-white">
+        {(['react', 'ask'] as Tab[]).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              tab === t
+                ? 'border-zinc-900 text-zinc-900'
+                : 'border-transparent text-zinc-400 hover:text-zinc-600'
+            }`}
+          >
+            {t === 'react' ? 'React' : 'Ask'}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 px-4 py-6 max-w-sm mx-auto w-full">
+
+        {tab === 'react' && (
+          <div className="flex flex-col gap-4">
+            <p className="text-xs text-zinc-400 uppercase tracking-widest">How's it going?</p>
+
+            <div className="grid grid-cols-1 gap-3">
+              {SIGNALS.map(s => {
+                const isActive = lastSignal === s.key && onCooldown;
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => sendSignal(s.key)}
+                    disabled={onCooldown || sending}
+                    className={`flex items-center gap-4 px-5 py-4 rounded-2xl border text-left transition-all active:scale-95 ${
+                      isActive
+                        ? 'bg-zinc-900 border-zinc-900 text-white'
+                        : onCooldown
+                        ? 'bg-white border-zinc-200 text-zinc-300 cursor-not-allowed'
+                        : 'bg-white border-zinc-200 text-zinc-800 hover:border-zinc-400 hover:shadow-sm'
+                    }`}
+                  >
+                    <span className="text-2xl">{s.emoji}</span>
+                    <span className="text-sm font-medium">{s.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Feedback / cooldown */}
+            <div className="h-6 flex items-center justify-center">
+              {feedback && (
+                <p className="text-sm text-zinc-500">{feedback}</p>
+              )}
+              {!feedback && onCooldown && (
+                <p className="text-sm text-zinc-400">Next signal in {cooldownLeft}s</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'ask' && (
+          <div className="flex flex-col gap-4">
+            <p className="text-xs text-zinc-400 uppercase tracking-widest">Ask a question</p>
+
+            <textarea
+              value={question}
+              onChange={e => setQuestion(e.target.value.slice(0, 200))}
+              disabled={onQCooldown}
+              placeholder="What's on your mind?"
+              rows={4}
+              className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 resize-none outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/10 disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-zinc-400">{question.length}/200</span>
+              {onQCooldown && (
+                <span className="text-xs text-zinc-400">Wait {qCooldownLeft}s</span>
+              )}
+            </div>
+
+            <button
+              onClick={sendQuestion}
+              disabled={!question.trim() || qSending || onQCooldown}
+              className="w-full py-3 rounded-full bg-zinc-900 text-white text-sm font-medium transition hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {qSending ? 'Submitting…' : 'Submit question'}
+            </button>
+
+            {qFeedback && (
+              <p className="text-sm text-center text-zinc-500">{qFeedback}</p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
