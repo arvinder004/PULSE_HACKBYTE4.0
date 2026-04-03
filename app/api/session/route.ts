@@ -1,50 +1,57 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSessionId } from '@/lib/session';
+import { verifyToken } from '@/lib/jwt';
+import { connectDB } from '@/lib/db';
+import SessionModel from '@/lib/models/Session';
 
-type Session = { sessionId: string; speakerName: string; topic: string; createdAt: number };
-
-// Survive Next.js HMR hot reloads by attaching to globalThis
-const g = globalThis as typeof globalThis & { __pulse_sessions?: Map<string, Session> };
-if (!g.__pulse_sessions) g.__pulse_sessions = new Map();
-const sessions = g.__pulse_sessions;
+async function getUser(req: NextRequest) {
+  const token = req.cookies.get('pulse_token')?.value;
+  if (!token) return null;
+  return verifyToken(token);
+}
 
 export async function POST(req: NextRequest) {
+  const user = await getUser(req);
+  if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+
   const body = await req.json().catch(() => null);
-  if (!body || typeof body.speakerName !== 'string' || typeof body.topic !== 'string') {
-    return NextResponse.json({ error: 'Invalid payload' }, { status: 400 });
+  if (!body?.speakerName || !body?.topic) {
+    return NextResponse.json({ error: 'speakerName and topic are required' }, { status: 400 });
   }
 
-  const sessionId = generateSessionId();
-  const createdAt = Date.now();
+  await connectDB();
 
-  // TODO: replace with SpacetimeDB reducer call (create_session) in later phase
-  sessions.set(sessionId, {
+  const sessionId = generateSessionId();
+  const session = await SessionModel.create({
     sessionId,
+    speakerId: user.userId,
     speakerName: body.speakerName,
     topic: body.topic,
-    createdAt,
   });
 
   return NextResponse.json({
-    sessionId,
-    speakerName: body.speakerName,
-    topic: body.topic,
-    createdAt,
+    sessionId: session.sessionId,
+    speakerName: session.speakerName,
+    topic: session.topic,
+    createdAt: session.createdAt,
   });
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get('sessionId');
+  if (!sessionId) return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 });
 
-  if (!sessionId) {
-    return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 });
-  }
+  await connectDB();
 
-  const session = sessions.get(sessionId);
-  if (!session) {
-    return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-  }
+  const session = await SessionModel.findOne({ sessionId });
+  if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
 
-  return NextResponse.json(session);
+  return NextResponse.json({
+    sessionId: session.sessionId,
+    speakerName: session.speakerName,
+    topic: session.topic,
+    active: session.active,
+    createdAt: session.createdAt,
+  });
 }

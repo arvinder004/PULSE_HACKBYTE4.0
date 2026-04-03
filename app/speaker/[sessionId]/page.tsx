@@ -118,10 +118,12 @@ export default function SpeakerDashboard() {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const max = Math.max(...Object.values(counts), 1);
 
-  // Pace: 0 = too slow, 50 = just right, 100 = too fast
+  // Pace dot: 0% = too slow, 100% = too fast
+  // slow_down from audience → speaker is going too fast → dot moves right
+  // excited from audience → speaker is going too slow → dot moves left
   const paceSignals = (counts['slow_down'] ?? 0) + (counts['excited'] ?? 0);
-  const pacePct = paceSignals === 0 ? 50 : Math.round(((counts['excited'] ?? 0) / paceSignals) * 100);
-  const paceLabel = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast' : pacePct < 35 ? 'Too slow' : 'Good pace';
+  const pacePct = paceSignals === 0 ? 50 : Math.round(((counts['slow_down'] ?? 0) / paceSignals) * 100);
+  const paceLabel = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
 
   if (!mounted) return null;
 

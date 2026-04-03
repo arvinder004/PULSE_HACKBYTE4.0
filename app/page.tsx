@@ -1,99 +1,166 @@
-"use client";
+'use client';
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
+
+type View = 'login' | 'register' | 'session';
+type User = { id: string; email: string; name: string };
 
 export default function Home() {
   const router = useRouter();
-  const [speakerName, setSpeakerName] = useState("");
-  const [topic, setTopic] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<View>('login');
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
+  // Check existing session
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.user) { setUser(d.user); setView('session'); } })
+      .finally(() => setLoading(false));
+  }, []);
 
-    if (!speakerName.trim() || !topic.trim()) {
-      setError("Please enter your name and a topic.");
-      return;
-    }
+  async function handleAuth(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    const fd = new FormData(e.currentTarget);
+    const body: Record<string, string> = {
+      email: fd.get('email') as string,
+      password: fd.get('password') as string,
+    };
+    if (view === 'register') body.name = fd.get('name') as string;
 
-    setIsSubmitting(true);
-    try {
-      const res = await fetch("/api/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speakerName: speakerName.trim(), topic: topic.trim() }),
-      });
+    const res = await fetch(`/api/auth/${view}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    setSubmitting(false);
 
-      if (!res.ok) {
-        throw new Error("Failed to create session");
-      }
-
-      const data = (await res.json()) as { sessionId: string };
-      router.push(`/speaker/${data.sessionId}`);
-    } catch (err) {
-      console.error(err);
-      setError("Something went wrong creating your session. Please try again.");
-    } finally {
-      setIsSubmitting(false);
-    }
+    if (!res.ok) { setError(data.error ?? 'Something went wrong'); return; }
+    setUser(data.user);
+    setView('session');
   }
 
+  async function handleCreateSession(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    const fd = new FormData(e.currentTarget);
+    const res = await fetch('/api/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        speakerName: fd.get('speakerName') as string,
+        topic: fd.get('topic') as string,
+      }),
+    });
+    const data = await res.json();
+    setSubmitting(false);
+    if (!res.ok) { setError(data.error ?? 'Failed to create session'); return; }
+    router.push(`/speaker/${data.sessionId}`);
+  }
+
+  async function handleLogout() {
+    await fetch('/api/auth/me', { method: 'DELETE' });
+    setUser(null);
+    setView('login');
+  }
+
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-white">
+      <p className="text-sm text-black/30">Loading…</p>
+    </div>
+  );
+
   return (
-    <div className="flex flex-1 items-center justify-center bg-zinc-50 px-4 py-16 font-sans dark:bg-black">
-      <main className="w-full max-w-xl rounded-2xl bg-white p-8 shadow-sm dark:bg-zinc-950">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Create a new PULSE session
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Enter your name and what you&apos;re talking about. We&apos;ll create a
-          unique session for you to share with your audience.
-        </p>
+    <div className="min-h-screen bg-white flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-zinc-800 dark:text-zinc-200">
-              Your name
-            </label>
-            <input
-              type="text"
-              value={speakerName}
-              onChange={(e) => setSpeakerName(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-0 transition focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-500/30"
-              placeholder="Ada Lovelace"
-              required
-            />
-          </div>
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight">PULSE</h1>
+          <p className="text-sm text-black/40 mt-1">Real-time audience intelligence</p>
+        </div>
 
-          <div>
-            <label className="block text-sm font-medium text-zinc-800 dark:text-zinc-200">
-              Topic
-            </label>
-            <input
-              type="text"
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-0 transition focus:border-zinc-900 focus:ring-2 focus:ring-zinc-900/10 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-300 dark:focus:ring-zinc-500/30"
-              placeholder="Intro to distributed systems"
-              required
-            />
-          </div>
+        {/* Auth forms */}
+        {(view === 'login' || view === 'register') && (
+          <form onSubmit={handleAuth} className="flex flex-col gap-4">
+            {view === 'register' && (
+              <Field label="Name" name="name" type="text" placeholder="Ada Lovelace" />
+            )}
+            <Field label="Email" name="email" type="email" placeholder="you@example.com" />
+            <Field label="Password" name="password" type="password" placeholder="••••••••" />
 
-          {error && (
-            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-          )}
+            {error && <p className="text-xs text-red-500">{error}</p>}
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="mt-2 inline-flex w-full items-center justify-center rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
-          >
-            {isSubmitting ? "Creating session…" : "Create session"}
-          </button>
-        </form>
-      </main>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="mt-1 w-full py-2.5 bg-black text-white text-sm rounded-lg hover:bg-black/80 disabled:opacity-50 transition-colors"
+            >
+              {submitting ? '…' : view === 'login' ? 'Sign in' : 'Create account'}
+            </button>
+
+            <p className="text-xs text-black/40 text-center">
+              {view === 'login' ? "Don't have an account? " : 'Already have an account? '}
+              <button
+                type="button"
+                onClick={() => { setView(view === 'login' ? 'register' : 'login'); setError(''); }}
+                className="text-black underline underline-offset-2"
+              >
+                {view === 'login' ? 'Register' : 'Sign in'}
+              </button>
+            </p>
+          </form>
+        )}
+
+        {/* Session creation */}
+        {view === 'session' && user && (
+          <form onSubmit={handleCreateSession} className="flex flex-col gap-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm text-black/50">Signed in as <span className="text-black font-medium">{user.name}</span></p>
+              <button type="button" onClick={handleLogout} className="text-xs text-black/30 hover:text-black underline underline-offset-2">
+                Sign out
+              </button>
+            </div>
+
+            <Field label="Your name" name="speakerName" type="text" placeholder="Ada Lovelace" defaultValue={user.name} />
+            <Field label="Topic" name="topic" type="text" placeholder="Intro to distributed systems" />
+
+            {error && <p className="text-xs text-red-500">{error}</p>}
+
+            <button
+              type="submit"
+              disabled={submitting}
+              className="mt-1 w-full py-2.5 bg-black text-white text-sm rounded-lg hover:bg-black/80 disabled:opacity-50 transition-colors"
+            >
+              {submitting ? '…' : 'Start presenting'}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, name, type, placeholder, defaultValue }: {
+  label: string; name: string; type: string; placeholder: string; defaultValue?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs text-black/50 font-medium uppercase tracking-wide">{label}</label>
+      <input
+        name={name}
+        type={type}
+        placeholder={placeholder}
+        defaultValue={defaultValue}
+        required
+        className="w-full border border-black/10 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-black/30 transition-colors placeholder:text-black/20"
+      />
     </div>
   );
 }
