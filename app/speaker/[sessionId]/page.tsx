@@ -83,6 +83,8 @@ export default function SpeakerDashboard() {
   const [aiOn, setAiOn] = useState(true);
   const [dark, setDark] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
+  const [audienceCount, setAudienceCount] = useState(0);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -93,10 +95,33 @@ export default function SpeakerDashboard() {
       .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
   }, [sessionId]);
 
+  // SSE — live signal counts
+  useEffect(() => {
+    if (!sessionId) return;
+    const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'snapshot') {
+          setCounts(prev => ({ ...prev, ...msg.counts }));
+        } else if (msg.type === 'signal') {
+          const key = msg.signal.signalType as string;
+          setCounts(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
+          setAudienceCount(prev => prev + 1);
+        }
+      } catch { /* ignore */ }
+    };
+    return () => es.close();
+  }, [sessionId]);
+
   const t = dark ? T.dark : T.light;
-  const counts = { confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 };
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const max = Math.max(...Object.values(counts), 1);
+
+  // Pace: 0 = too slow, 50 = just right, 100 = too fast
+  const paceSignals = (counts['slow_down'] ?? 0) + (counts['excited'] ?? 0);
+  const pacePct = paceSignals === 0 ? 50 : Math.round(((counts['excited'] ?? 0) / paceSignals) * 100);
+  const paceLabel = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast' : pacePct < 35 ? 'Too slow' : 'Good pace';
 
   if (!mounted) return null;
 
@@ -110,7 +135,7 @@ export default function SpeakerDashboard() {
           <span className={`text-xs ${t.label}`}>Speaker</span>
         </div>
         <div className="flex items-center gap-2">
-          <Tag t={t}>0 audience</Tag>
+          <Tag t={t}>{audienceCount > 0 ? `${audienceCount} signals` : '0 audience'}</Tag>
           <button onClick={() => setMic(v => !v)}>
             <Tag t={t} active={mic}>Mic {mic ? 'on' : 'off'}</Tag>
           </button>
@@ -201,11 +226,11 @@ export default function SpeakerDashboard() {
               <div className="flex items-center gap-3 mt-2">
                 <span className={`text-xs w-16 ${t.muted}`}>Too slow</span>
                 <div className={`flex-1 relative h-px ${t.bar}`}>
-                  <div className={`absolute top-1/2 w-2 h-2 rounded-full ${t.dot}`} style={{ left: '50%', transform: 'translate(-50%,-50%)' }} />
+                  <div className={`absolute top-1/2 w-2 h-2 rounded-full transition-all duration-700 ${t.dot}`} style={{ left: `${pacePct}%`, transform: 'translate(-50%,-50%)' }} />
                 </div>
                 <span className={`text-xs w-16 text-right ${t.muted}`}>Too fast</span>
               </div>
-              <p className={`text-xs text-center mt-2 ${t.muted}`}>Not enough signal</p>
+              <p className={`text-xs text-center mt-2 ${t.muted}`}>{paceLabel}</p>
             </div>
           </div>
 
