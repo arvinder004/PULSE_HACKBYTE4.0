@@ -347,7 +347,7 @@ flowchart TD
 
   Audience[Audience Browser] -->|8. Scan QR → /audience/:sessionId| AudienceUI["Audience View"]
   AudienceUI -->|9. Subscribe via SpacetimeProvider| STDB
-  STDB -->|10. Push session + signals| AudienceUI
+  AudienceUI -->|10. Push session + signals| STDB
   STDB -->|11. Push updates| SpeakerUI
 ```
 
