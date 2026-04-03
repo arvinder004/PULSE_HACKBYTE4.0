@@ -110,7 +110,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => { setView(view === 'login' ? 'register' : 'login'); setError(''); }}
-                className="text-black underline underline-offset-2"
+                className="text-black underline underline-offset-2 cursor-pointer"
               >
                 {view === 'login' ? 'Register' : 'Sign in'}
               </button>
