@@ -1,50 +1,54 @@
-import { notFound } from "next/navigation";
+'use client';
 
-interface AudiencePageProps {
-  params: Promise<{ sessionId: string }>;
-}
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 
-async function fetchSession(sessionId: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3001";
-  const res = await fetch(`${baseUrl}/api/session?sessionId=${encodeURIComponent(sessionId)}`, {
-    // Avoid caching so the shell always reflects latest state
-    cache: "no-store",
-  });
+export const dynamic = 'force-dynamic';
 
-  if (!res.ok) {
-    return null;
+export default function AudiencePage() {
+  const params = useParams();
+  const sessionId = params?.sessionId as string;
+
+  const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`/api/session?sessionId=${sessionId}`)
+      .then(r => {
+        if (r.status === 404) { setNotFound(true); return null; }
+        return r.json();
+      })
+      .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
+  }, [sessionId]);
+
+  if (notFound) {
+    return (
+      <div className="flex flex-1 items-center justify-center min-h-screen bg-zinc-50 px-4">
+        <div className="text-center">
+          <p className="text-sm text-zinc-500 uppercase tracking-widest mb-2">Session not found</p>
+          <p className="text-xs text-zinc-400">The session may have ended or the link is invalid.</p>
+        </div>
+      </div>
+    );
   }
 
-  return (await res.json()) as {
-    sessionId: string;
-    speakerName: string;
-    topic: string;
-  };
-}
-
-export default async function AudiencePage({ params }: AudiencePageProps) {
-  const { sessionId } = await params;
-  const session = await fetchSession(sessionId);
   if (!session) {
-    notFound();
+    return (
+      <div className="flex flex-1 items-center justify-center min-h-screen bg-zinc-50 px-4">
+        <p className="text-sm text-zinc-400">Loading…</p>
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center bg-zinc-50 px-4 py-16 font-sans dark:bg-black">
-      <main className="w-full max-w-xl rounded-2xl bg-white p-8 shadow-sm dark:bg-zinc-950">
-        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Audience view
-        </p>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          {session.topic}
-        </h1>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          with <span className="font-medium text-zinc-900 dark:text-zinc-100">{session.speakerName}</span>
-        </p>
-
-        <div className="mt-6 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-6 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400">
-          This is the audience shell for session <span className="font-mono text-xs">{session.sessionId}</span>.
-          Real-time signals, questions, and mood features will appear here in later phases.
+    <div className="flex flex-1 flex-col min-h-screen bg-zinc-50 px-4 py-10">
+      <main className="w-full max-w-sm mx-auto">
+        <p className="text-xs text-zinc-400 uppercase tracking-widest mb-3">Audience</p>
+        <h1 className="text-2xl font-semibold leading-tight text-zinc-900">{session.topic}</h1>
+        <p className="text-sm text-zinc-500 mt-1">with {session.speakerName}</p>
+        <div className="mt-8 border border-zinc-200 rounded-xl px-4 py-5 text-sm text-zinc-400 bg-white">
+          Signal buttons and questions will appear here in Phase 2.
         </div>
       </main>
     </div>

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSessionId } from '@/lib/session';
 
-// NOTE: This is a minimal placeholder implementation for Phase 1.
-// It generates a session ID and returns speaker/topic in memory.
-// Later phases can wire this to SpacetimeDB reducers and real storage.
+type Session = { sessionId: string; speakerName: string; topic: string; createdAt: number };
 
-// In-memory store during hackathon iteration (per server instance only)
-const sessions = new Map<string, { sessionId: string; speakerName: string; topic: string; createdAt: number }>();
+// Survive Next.js HMR hot reloads by attaching to globalThis
+const g = globalThis as typeof globalThis & { __pulse_sessions?: Map<string, Session> };
+if (!g.__pulse_sessions) g.__pulse_sessions = new Map();
+const sessions = g.__pulse_sessions;
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
