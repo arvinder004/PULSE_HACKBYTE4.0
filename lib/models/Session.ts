@@ -30,7 +30,7 @@ export interface IIntervention {
 
 export interface ISession extends Document {
   sessionId: string;
-  speakerId: string;       // ref to User._id
+  speakerId?: string | null;  // null for anonymous sessions
   speakerName: string;
   topic: string;
   active: boolean;
@@ -71,7 +71,7 @@ const InterventionSchema = new Schema<IIntervention>({
 
 const SessionSchema = new Schema<ISession>({
   sessionId:     { type: String, required: true, unique: true },
-  speakerId:     { type: String, required: true },
+  speakerId:     { type: String, default: null },
   speakerName:   { type: String, required: true },
   topic:         { type: String, required: true },
   active:        { type: Boolean, default: true },
