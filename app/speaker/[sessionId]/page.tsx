@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
+import DashboardNav from '@/components/DashboardNav';
 
 // Room state distilled to a single ambient signal
 type RoomState = 'good' | 'check' | 'confused' | 'fast' | 'slow';
@@ -44,6 +45,7 @@ export default function SpeakerView() {
   const [counts,   setCounts]   = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [mounted,  setMounted]  = useState(false);
   const [aiMsg,    setAiMsg]    = useState<string | null>(null);
+  const [dark,     setDark]     = useState(true);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -81,20 +83,25 @@ export default function SpeakerView() {
   const cfg       = ROOM_CONFIG[roomState];
   const total     = Object.values(counts).reduce((a, b) => a + b, 0);
 
-  return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center select-none">
+  const bg = dark ? 'bg-black text-white' : 'bg-white text-black';
+  const subText = dark ? 'text-white/30' : 'text-black/30';
+  const whisper = dark ? 'bg-white/5 border-white/10 text-white/70' : 'bg-black/5 border-black/10 text-black/60';
+  const bottomText = dark ? 'text-white/20' : 'text-black/20';
+  const bottomSub = dark ? 'text-white/30' : 'text-black/30';
 
-      {/* Minimal header */}
-      <div className="absolute top-0 left-0 right-0 h-12 flex items-center justify-between px-6 border-b border-white/8">
-        <span className="text-sm font-semibold tracking-tight">PULSE</span>
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-white/30 font-mono">{session?.topic ?? sessionId}</span>
-          <span className="text-xs text-white/20">{total} signals</span>
-        </div>
-      </div>
+  return (
+    <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${bg}`}>
+
+      <DashboardNav
+        sessionId={sessionId}
+        mode="speaker"
+        dark={dark}
+        onToggleDark={() => setDark(v => !v)}
+        signalCount={total}
+      />
 
       {/* Single ambient indicator */}
-      <div className="flex flex-col items-center gap-6">
+      <div className="flex flex-col items-center justify-center flex-1 gap-6">
         <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
           <div className="flex flex-col items-center gap-1 text-center">
             <span className={`text-lg font-semibold transition-colors duration-700 ${cfg.color}`}>
@@ -102,20 +109,20 @@ export default function SpeakerView() {
             </span>
           </div>
         </div>
-        <p className="text-sm text-white/30">{cfg.sub}</p>
+        <p className={`text-sm ${subText}`}>{cfg.sub}</p>
 
         {/* AI whisper — appears only when intervention fires */}
         {aiMsg && (
-          <div className="mt-4 max-w-xs text-center px-5 py-3 rounded-xl bg-white/5 border border-white/10 text-sm text-white/70 animate-fade-in">
+          <div className={`mt-4 max-w-xs text-center px-5 py-3 rounded-xl border text-sm animate-fade-in ${whisper}`}>
             {aiMsg}
           </div>
         )}
       </div>
 
       {/* Audience join link — bottom */}
-      <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center gap-1">
-        <span className="text-[11px] text-white/20 uppercase tracking-widest">Audience</span>
-        <span className="text-xs text-white/30 font-mono">/audience/{sessionId}</span>
+      <div className="flex flex-col items-center gap-1 pb-6">
+        <span className={`text-[11px] uppercase tracking-widest ${bottomText}`}>Audience</span>
+        <span className={`text-xs font-mono ${bottomSub}`}>/audience/{sessionId}</span>
       </div>
     </div>
   );

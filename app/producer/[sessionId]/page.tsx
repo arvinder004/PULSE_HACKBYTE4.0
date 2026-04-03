@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
+import DashboardNav from '@/components/DashboardNav';
 
 type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
 
@@ -25,7 +26,7 @@ const BARS = Array.from({ length: 48 }, (_, i) => ({
   lit: i % 3 !== 0,
 }));
 
-const T = {
+const T_DARK = {
   root:        'bg-black text-white',
   nav:         'bg-black border-white/10',
   divider:     'bg-white/5',
@@ -47,12 +48,35 @@ const T = {
   dot:         'bg-white border-black',
 };
 
+const T_LIGHT = {
+  root:        'bg-white text-black',
+  nav:         'bg-white border-black/10',
+  divider:     'bg-black/5',
+  panel:       'bg-white',
+  label:       'text-black/40',
+  muted:       'text-black/25',
+  sub:         'text-black/50',
+  bar:         'bg-black/10',
+  barFill:     'bg-black',
+  barLit:      'bg-black/20',
+  barDim:      'bg-black/6',
+  tagBorder:   'border-black/15 text-black/50',
+  tagActive:   'border-black/50 text-black',
+  tabActive:   'text-black border-black',
+  tabInactive: 'text-black/30 border-transparent hover:text-black/60',
+  tabBorder:   'border-black/10',
+  totalCard:   'border-black/10',
+  qrBox:       'border-black/10 text-black/25',
+  dot:         'bg-black border-white',
+};
+
 export default function ProducerDashboard() {
   const params = useParams();
   const sessionId = params?.sessionId as string;
 
   const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
   const [tab, setTab] = useState<Tab>('ai');
+  const [dark, setDark] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [audienceCount, setAudienceCount] = useState(0);
@@ -86,6 +110,7 @@ export default function ProducerDashboard() {
 
   if (!mounted) return null;
 
+  const T     = dark ? T_DARK : T_LIGHT;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const max   = Math.max(...Object.values(counts), 1);
 
@@ -94,21 +119,15 @@ export default function ProducerDashboard() {
   const paceLabel   = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
 
   return (
-    <div className={`min-h-screen flex flex-col select-none ${T.root}`}>
+    <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${T.root}`}>
 
-      {/* Nav */}
-      <nav className={`h-12 border-b flex items-center justify-between px-6 shrink-0 ${T.nav}`}>
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-semibold tracking-tight">PULSE</span>
-          <span className={`text-xs ${T.label}`}>Producer</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className={`text-xs px-3 py-1 border rounded-full ${T.tagBorder}`}>
-            {audienceCount > 0 ? `${audienceCount} signals` : '0 signals'}
-          </span>
-          <span className={`text-xs font-mono ${T.muted}`}>{sessionId}</span>
-        </div>
-      </nav>
+      <DashboardNav
+        sessionId={sessionId}
+        mode="producer"
+        dark={dark}
+        onToggleDark={() => setDark(v => !v)}
+        signalCount={audienceCount}
+      />
 
       {/* Layout */}
       <div className={`flex flex-1 gap-px overflow-hidden ${T.divider}`}>
