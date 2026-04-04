@@ -568,6 +568,8 @@ export default function SpeakerView() {
   const total     = Object.values(counts).reduce((a, b) => a + b, 0);
   const transcriptLive = transcript.listening;
 
+  if (!mounted) return null;
+
   const bg = dark ? 'bg-black text-white' : 'bg-white text-black';
   const subText = dark ? 'text-white/30' : 'text-black/70';
   const whisper = dark ? 'bg-white/5 border-white/10 text-white/70' : 'bg-black/5 border-black/10 text-black/80';

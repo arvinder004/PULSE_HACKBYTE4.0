@@ -8,7 +8,8 @@ TARGET_DIR="/home/ubuntu/pulse"
 echo "Deploying latest code changes..."
 
 # Checkout backend files
-git --work-tree="${TARGET_DIR}" --git-dir="${GIT_DIR}" checkout --force main
+git --work-tree="${TARGET_DIR}" --git-dir="${GIT_DIR}" checkout --force main -- .
+# git --work-tree="/home/ubuntu/pulse" --git-dir="/home/ubuntu/pulse.git" checkout --force main
 
 echo "Code deployed successfully."
 echo ""
