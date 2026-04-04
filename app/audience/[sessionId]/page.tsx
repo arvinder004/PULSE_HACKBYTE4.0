@@ -3,64 +3,64 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { getFingerprint } from '@/lib/fingerprint';
+import SignalButtons, { type SignalKey } from '@/components/SignalButtons';
+import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 
 export const dynamic = 'force-dynamic';
 
 type Tab = 'react' | 'ask';
 
-const SIGNALS = [
-  { key: 'confused',  emoji: '😕', label: 'Confused'   },
-  { key: 'clear',     emoji: '✅', label: 'Clear'       },
-  { key: 'excited',   emoji: '🔥', label: 'Excited'     },
-  { key: 'slow_down', emoji: '🐢', label: 'Slow down'   },
-  { key: 'question',  emoji: '✋', label: 'Question'    },
-] as const;
-
-type SignalKey = typeof SIGNALS[number]['key'];
+const SIGNAL_EMOJI: Record<SignalKey, string> = {
+  confused:  '😕',
+  clear:     '✅',
+  excited:   '🔥',
+  slow_down: '🐢',
+  question:  '✋',
+};
 
 const COOLDOWN_MS = 10_000;
 
 export default function AudiencePage() {
-  const params = useParams();
+  const params    = useParams();
   const sessionId = params?.sessionId as string;
 
-  const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
+  const [session,  setSession]  = useState<{ speakerName: string; topic: string } | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [tab, setTab] = useState<Tab>('react');
+  const [tab,      setTab]      = useState<Tab>('react');
 
   // signals
-  const [lastSignal, setLastSignal] = useState<SignalKey | null>(null);
+  const [lastSignal,    setLastSignal]    = useState<SignalKey | null>(null);
   const [cooldownUntil, setCooldownUntil] = useState(0);
-  const [cooldownLeft, setCooldownLeft] = useState(0);
-  const [sending, setSending] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [cooldownLeft,  setCooldownLeft]  = useState(0);
+  const [sending,       setSending]       = useState(false);
+  const [feedback,      setFeedback]      = useState<string | null>(null);
 
   // floating reactions
-  type Reaction = { id: number; emoji: string; x: number };
-  const [reactions, setReactions] = useState<Reaction[]>([]);
+  const [reactions,  setReactions]  = useState<FloatingReaction[]>([]);
   const reactionId = useRef(0);
 
   // questions
-  const [question, setQuestion] = useState('');
-  const [qSending, setQSending] = useState(false);
-  const [qFeedback, setQFeedback] = useState<string | null>(null);
+  const [question,       setQuestion]       = useState('');
+  const [qSending,       setQSending]       = useState(false);
+  const [qFeedback,      setQFeedback]      = useState<string | null>(null);
   const [qCooldownUntil, setQCooldownUntil] = useState(0);
-  const [qCooldownLeft, setQCooldownLeft] = useState(0);
+  const [qCooldownLeft,  setQCooldownLeft]  = useState(0);
 
-  const audienceId = useRef<string>('');
-  const fingerprint = useRef<string>('');
+  const audienceId  = useRef('');
+  const fpRef       = useRef('');
 
+  // ── Init stable IDs ──────────────────────────────────────────────────────
   useEffect(() => {
-    // stable per-browser audience ID
     let id = localStorage.getItem('pulse_audience_id');
     if (!id) {
       id = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
       localStorage.setItem('pulse_audience_id', id);
     }
     audienceId.current = id;
-    getFingerprint().then(fp => { fingerprint.current = fp; });
+    getFingerprint().then(fp => { fpRef.current = fp; });
   }, []);
 
+  // ── Load session ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionId) return;
     fetch(`/api/session?sessionId=${sessionId}`)
@@ -68,7 +68,7 @@ export default function AudiencePage() {
       .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
   }, [sessionId]);
 
-  // cooldown ticker
+  // ── Cooldown ticker ──────────────────────────────────────────────────────
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now();
@@ -78,7 +78,7 @@ export default function AudiencePage() {
     return () => clearInterval(id);
   }, [cooldownUntil, qCooldownUntil]);
 
-  // SSE — floating reactions from other audience members
+  // ── SSE — floating reactions from all audience members ───────────────────
   useEffect(() => {
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
@@ -86,11 +86,11 @@ export default function AudiencePage() {
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'signal') {
-          const sig = SIGNALS.find(s => s.key === msg.signal.signalType);
-          if (!sig) return;
+          const emoji = SIGNAL_EMOJI[msg.signal.signalType as SignalKey];
+          if (!emoji) return;
           const id = ++reactionId.current;
-          const x = 10 + Math.random() * 80; // % from left
-          setReactions(prev => [...prev.slice(-20), { id, emoji: sig.emoji, x }]);
+          const x  = 10 + Math.random() * 80;
+          setReactions(prev => [...prev.slice(-20), { id, emoji, x }]);
           setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
         }
       } catch { /* ignore */ }
@@ -98,19 +98,51 @@ export default function AudiencePage() {
     return () => es.close();
   }, [sessionId]);
 
+  // ── Send signal — HTTP + SpacetimeDB reducer ─────────────────────────────
   async function sendSignal(key: SignalKey) {
     if (Date.now() < cooldownUntil || sending) return;
     setSending(true);
     setLastSignal(key);
+
+    const id = `${audienceId.current}-${Date.now()}`;
+
     try {
-      await fetch('/api/signals', {
+      // Primary: HTTP route (handles weighting, rate-limit, SSE broadcast)
+      const res = await fetch('/api/signals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, signalType: key, audienceId: audienceId.current, fingerprint: fingerprint.current }),
+        body: JSON.stringify({
+          sessionId,
+          signalType: key,
+          audienceId: audienceId.current,
+          fingerprint: fpRef.current,
+        }),
       });
-      setCooldownUntil(Date.now() + COOLDOWN_MS);
-      setFeedback('Sent!');
-      setTimeout(() => setFeedback(null), 1500);
+
+      if (res.ok) {
+        const { weight } = await res.json();
+
+        // Secondary: persist to SpacetimeDB for durable state + subscriptions
+        try {
+          const stdb = (window as any).__spacetimeReducers;
+          stdb?.submitSignal?.({
+            id,
+            session_id:  sessionId,
+            signal_type: key,
+            audience_id: audienceId.current,
+            fingerprint: fpRef.current,
+            weight:      weight ?? 1.0,
+          });
+        } catch { /* SpacetimeDB optional — graceful degradation */ }
+
+        setCooldownUntil(Date.now() + COOLDOWN_MS);
+        setFeedback('Sent!');
+        setTimeout(() => setFeedback(null), 1500);
+      } else if (res.status === 429) {
+        const d = await res.json().catch(() => ({}));
+        setFeedback(`Wait ${d.retryAfter ?? '?'}s`);
+        setTimeout(() => setFeedback(null), 2000);
+      }
     } catch {
       setFeedback('Failed to send');
       setTimeout(() => setFeedback(null), 2000);
@@ -119,6 +151,7 @@ export default function AudiencePage() {
     }
   }
 
+  // ── Send question ────────────────────────────────────────────────────────
   async function sendQuestion() {
     const text = question.trim();
     if (!text || qSending || Date.now() < qCooldownUntil) return;
@@ -145,6 +178,7 @@ export default function AudiencePage() {
     }
   }
 
+  // ── Error / loading states ───────────────────────────────────────────────
   if (notFound) return (
     <div className="flex items-center justify-center min-h-screen bg-zinc-50 px-4">
       <div className="text-center">
@@ -160,23 +194,10 @@ export default function AudiencePage() {
     </div>
   );
 
-  const onCooldown = cooldownLeft > 0;
-  const onQCooldown = qCooldownLeft > 0;
-
   return (
     <div className="flex flex-col min-h-screen bg-zinc-50">
-      {/* Floating reactions overlay */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden z-50">
-        {reactions.map(r => (
-          <span
-            key={r.id}
-            className="absolute text-2xl animate-float-up"
-            style={{ left: `${r.x}%`, bottom: '20%' }}
-          >
-            {r.emoji}
-          </span>
-        ))}
-      </div>
+      <FloatingReactions reactions={reactions} />
+
       {/* Header */}
       <header className="bg-white border-b border-zinc-200 px-4 py-4">
         <p className="text-xs text-zinc-400 uppercase tracking-widest">Audience</p>
@@ -207,70 +228,42 @@ export default function AudiencePage() {
         {tab === 'react' && (
           <div className="flex flex-col gap-4">
             <p className="text-xs text-zinc-400 uppercase tracking-widest">How's it going?</p>
-
-            <div className="grid grid-cols-1 gap-3">
-              {SIGNALS.map(s => {
-                const isActive = lastSignal === s.key && onCooldown;
-                return (
-                  <button
-                    key={s.key}
-                    onClick={() => sendSignal(s.key)}
-                    disabled={onCooldown || sending}
-                    className={`flex items-center gap-4 px-5 py-4 rounded-2xl border text-left transition-all active:scale-95 ${
-                      isActive
-                        ? 'bg-zinc-900 border-zinc-900 text-white'
-                        : onCooldown
-                        ? 'bg-white border-zinc-200 text-zinc-300 cursor-not-allowed'
-                        : 'bg-white border-zinc-200 text-zinc-800 hover:border-zinc-400 hover:shadow-sm'
-                    }`}
-                  >
-                    <span className="text-2xl">{s.emoji}</span>
-                    <span className="text-sm font-medium">{s.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Feedback / cooldown */}
-            <div className="h-6 flex items-center justify-center">
-              {feedback && (
-                <p className="text-sm text-zinc-500">{feedback}</p>
-              )}
-              {!feedback && onCooldown && (
-                <p className="text-sm text-zinc-400">Next signal in {cooldownLeft}s</p>
-              )}
-            </div>
+            <SignalButtons
+              onSignal={sendSignal}
+              lastSignal={lastSignal}
+              cooldownLeft={cooldownLeft}
+              sending={sending}
+            />
+            {feedback && (
+              <p className="text-sm text-center text-zinc-500">{feedback}</p>
+            )}
           </div>
         )}
 
         {tab === 'ask' && (
           <div className="flex flex-col gap-4">
             <p className="text-xs text-zinc-400 uppercase tracking-widest">Ask a question</p>
-
             <textarea
               value={question}
               onChange={e => setQuestion(e.target.value.slice(0, 200))}
-              disabled={onQCooldown}
+              disabled={qCooldownLeft > 0}
               placeholder="What's on your mind?"
               rows={4}
               className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 resize-none outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/10 disabled:opacity-50 disabled:cursor-not-allowed"
             />
-
             <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-400">{question.length}/200</span>
-              {onQCooldown && (
+              {qCooldownLeft > 0 && (
                 <span className="text-xs text-zinc-400">Wait {qCooldownLeft}s</span>
               )}
             </div>
-
             <button
               onClick={sendQuestion}
-              disabled={!question.trim() || qSending || onQCooldown}
+              disabled={!question.trim() || qSending || qCooldownLeft > 0}
               className="w-full py-3 rounded-full bg-zinc-900 text-white text-sm font-medium transition hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {qSending ? 'Submitting…' : 'Submit question'}
             </button>
-
             {qFeedback && (
               <p className="text-sm text-center text-zinc-500">{qFeedback}</p>
             )}

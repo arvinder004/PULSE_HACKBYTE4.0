@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
+import PulseVisualizer from '@/components/PulseVisualizer';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 
 type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
@@ -135,7 +136,6 @@ export default function ProducerDashboard() {
 
   const T     = dark ? T_DARK : T_LIGHT;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const max   = Math.max(...Object.values(counts), 1);
 
   const paceSignals = (counts['slow_down'] ?? 0) + (counts['excited'] ?? 0);
   const pacePct     = paceSignals === 0 ? 50 : Math.round(((counts['slow_down'] ?? 0) / paceSignals) * 100);
@@ -163,24 +163,8 @@ export default function ProducerDashboard() {
           {/* Pulse */}
           <div className={`p-5 flex-none ${T.panel}`}>
             <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Room Pulse</p>
-            <div className="flex flex-col items-center py-6 gap-1">
-              <span className="text-5xl font-bold tabular-nums">{total}</span>
-              <span className={`text-xs uppercase tracking-widest ${T.label}`}>signals</span>
-            </div>
-            <div className="flex flex-col gap-3 mt-2">
-              {SIGNAL_TYPES.map(s => {
-                const c   = counts[s.key];
-                const pct = (c / max) * 100;
-                return (
-                  <div key={s.key} className="flex items-center gap-3">
-                    <span className={`text-xs w-20 ${T.sub}`}>{s.label}</span>
-                    <div className={`flex-1 h-px relative ${T.bar}`}>
-                      <div className={`absolute inset-y-0 left-0 transition-all duration-500 ${T.barFill}`} style={{ width: `${pct}%`, height: '1px' }} />
-                    </div>
-                    <span className={`text-xs font-mono w-4 text-right ${T.sub}`}>{c}</span>
-                  </div>
-                );
-              })}
+            <div className="mt-4">
+              <PulseVisualizer counts={counts} dark={dark} />
             </div>
           </div>
 
