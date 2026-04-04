@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   const session = await Session.findOneAndUpdate(
     { sessionId: body.sessionId },
     { $set: { primaryAudienceId: body.audienceId } },
-    { new: true }
+    { returnDocument: 'after' }
   ).lean();
 
   if (!session) return NextResponse.json({ error: 'Session not found' }, { status: 404 });

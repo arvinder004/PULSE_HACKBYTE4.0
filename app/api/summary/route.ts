@@ -76,7 +76,7 @@ export async function POST(req: Request) {
       },
       $setOnInsert: { createdAt: new Date() },
     },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 
   console.log('[PULSE][Phase4][Summary] saved', {

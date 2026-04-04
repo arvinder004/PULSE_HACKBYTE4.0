@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
       },
       $setOnInsert: { createdAt: new Date() },
     },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 
   console.log('[PULSE][Coach] saved report', { sessionId, reportId: report._id?.toString() });

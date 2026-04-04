@@ -106,7 +106,7 @@ export async function POST(req: Request) {
           createdAt: new Date(),
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     console.log('[PULSE][Upload] ✓ TranscriptChunk saved', { sessionId, chunkIndex, docId: result?._id?.toString() });
   } catch (e: any) {

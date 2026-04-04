@@ -12,7 +12,7 @@ export async function POST(req: Request) {
     const res = await Session.findOneAndUpdate(
       { sessionId: body.sessionId },
       { $set: { active: true }, $unset: { endedAt: '' } },
-      { new: true }
+      { returnDocument: 'after' }
     ).lean();
     if (!res) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     console.log('[PULSE][Session] reactivated', { sessionId: body.sessionId });
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   const res = await Session.findOneAndUpdate(
     { sessionId: body.sessionId },
     { $set: { active: false, endedAt: new Date() } },
-    { new: true }
+    { returnDocument: 'after' }
   ).lean();
 
   if (!res) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
