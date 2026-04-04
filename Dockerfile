@@ -3,7 +3,7 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-# RUN npm ci --frozen-lockfile
+RUN npm ci --frozen-lockfile
 
 # ── Stage 2: Build ────────────────────────────────────────────────────────────
 FROM node:20-alpine AS build
