@@ -39,6 +39,16 @@ const interventionTable = table(
   }
 );
 
+const captionTable = table(
+  { name: 'caption', public: true },
+  {
+    id: t.string().primaryKey(),
+    session_id: t.string(),
+    text: t.string(),
+    created_at: t.u64(),
+  }
+);
+
 const questionTable = table(
   { name: 'question', public: true },
   {
@@ -111,6 +121,7 @@ export const spacetimedb = schema({
   session: sessionTable,
   signal: signalTable,
   intervention: interventionTable,
+  caption: captionTable,
   question: questionTable,
   question_upvote: questionUpvoteTable,
   mood_word: moodWordTable,
@@ -169,6 +180,19 @@ spacetimedb.reducer(
       suggestion,
       urgency,
       acknowledged: false,
+      created_at: BigInt(Date.now()),
+    });
+  }
+);
+
+spacetimedb.reducer(
+  { name: 'submit_caption' },
+  { id: t.string(), session_id: t.string(), text: t.string() },
+  (ctx, { id, session_id, text }) => {
+    ctx.db.caption.insert({
+      id,
+      session_id,
+      text,
       created_at: BigInt(Date.now()),
     });
   }

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
+import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 
 type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
 
@@ -80,6 +81,10 @@ export default function ProducerDashboard() {
   const [mounted, setMounted] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [audienceCount, setAudienceCount] = useState(0);
+  const [audioFiles, setAudioFiles] = useState<Array<{ id: string; filename: string; ts?: string | null }>>([]);
+  const DEBUG = true;
+
+  const spacetime = useSpacetimeSession(sessionId);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -108,6 +113,24 @@ export default function ProducerDashboard() {
     return () => es.close();
   }, [sessionId]);
 
+  useEffect(() => {
+    if (!sessionId) return;
+    let alive = true;
+    async function fetchAudio() {
+      try {
+        const res = await fetch(`/api/audio/list?sessionId=${sessionId}`);
+        const json = await res.json().catch(() => ({} as any));
+        if (alive) setAudioFiles(json.items || []);
+        if (DEBUG) console.log('[PULSE][Phase3][Audio] list', (json.items || []).length);
+      } catch (e) {
+        if (DEBUG) console.log('[PULSE][Phase3][Audio] list failed', String(e));
+      }
+    }
+    fetchAudio();
+    const id = setInterval(fetchAudio, 20_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionId]);
+
   if (!mounted) return null;
 
   const T     = dark ? T_DARK : T_LIGHT;
@@ -117,6 +140,8 @@ export default function ProducerDashboard() {
   const paceSignals = (counts['slow_down'] ?? 0) + (counts['excited'] ?? 0);
   const pacePct     = paceSignals === 0 ? 50 : Math.round(((counts['slow_down'] ?? 0) / paceSignals) * 100);
   const paceLabel   = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
+
+  const latestCaption = [...(spacetime.captions || [])].sort((a: any, b: any) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0))[0];
 
   return (
     <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${T.root}`}>
@@ -165,6 +190,27 @@ export default function ProducerDashboard() {
             <div className="flex flex-col items-center gap-3 py-2 mt-2">
               <div className={`w-28 h-28 border flex items-center justify-center text-xs ${T.qrBox}`}>QR</div>
               <span className={`text-[11px] font-mono text-center break-all ${T.muted}`}>/audience/{sessionId}</span>
+            </div>
+          </div>
+
+          {/* Captions */}
+          <div className={`p-5 flex-none ${T.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Captions</p>
+            <div className={`mt-3 text-xs ${T.muted}`}>
+              {latestCaption?.text || 'No captions yet'}
+            </div>
+          </div>
+
+          {/* Audio chunks */}
+          <div className={`p-5 flex-none ${T.panel}`}>
+            <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Audio Chunks</p>
+            <div className={`mt-3 flex flex-col gap-2 text-[11px] ${T.muted}`}>
+              {audioFiles.length === 0 && <span>No audio yet</span>}
+              {audioFiles.slice(0, 5).map((f) => (
+                <span key={f.id} className="font-mono break-all">
+                  {f.filename}
+                </span>
+              ))}
             </div>
           </div>
 

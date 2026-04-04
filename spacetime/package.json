@@ -1,0 +1,21 @@
+{
+  "name": "pulse-spacetime-module",
+  "version": "1.0.0",
+  "description": "SpacetimeDB module for PULSE",
+  "scripts": {
+    "stdb:publish": "spacetime publish --module-path spacetime pulse",
+    "stdb:generate": "spacetime generate --lang typescript --out-dir src/module_bindings --module-path spacetime",
+    "stdb:logs": "spacetime logs pulse",
+    "build": "spacetime build",
+    "publish": "spacetime publish"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "spacetimedb": "^2.1.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.2"
+  }
+}

@@ -26,6 +26,10 @@ export interface IIntervention {
   urgency: 'high' | 'medium' | 'low';
   acknowledged: boolean;
   createdAt: Date;
+  audioFileId?: string;
+  ttsFileId?: string;
+  contextTranscript?: string;
+  contextSignals?: Record<string, number>;
 }
 
 export interface ISession extends Document {
@@ -65,6 +69,10 @@ const InterventionSchema = new Schema<IIntervention>({
   message:      String,
   suggestion:   String,
   urgency:      String,
+  audioFileId:  String,
+  ttsFileId:    String,
+  contextTranscript: String,
+  contextSignals:    { type: Schema.Types.Mixed, default: null },
   acknowledged: { type: Boolean, default: false },
   createdAt:    { type: Date, default: Date.now },
 }, { _id: false });

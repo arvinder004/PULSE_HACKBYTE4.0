@@ -8,27 +8,32 @@ import { DbConnection } from '@/src/module_bindings';
  * Must be used inside <SpacetimeProvider>.
  */
 export function useSpacetimeSession(sessionId: string) {
-  const conn = useSpacetimeDB<DbConnection>();
+  const conn = useSpacetimeDB();
+  const connection = conn?.getConnection?.() as any;
+  const tables = (connection?.db ?? {}) as any;
 
-  const { rows: signals } = useTable<DbConnection, any>('signal');
-  const { rows: interventions } = useTable<DbConnection, any>('intervention');
-  const { rows: questions } = useTable<DbConnection, any>('question');
-  const { rows: moodWords } = useTable<DbConnection, any>('mood_word');
-  const { rows: polls } = useTable<DbConnection, any>('poll');
+  const [signals] = useTable((tables.signal ?? {}) as any);
+  const [interventions] = useTable((tables.intervention ?? {}) as any);
+  const [captions] = useTable((tables.caption ?? {}) as any);
+  const [questions] = useTable((tables.question ?? {}) as any);
+  const [moodWords] = useTable((tables.mood_word ?? {}) as any);
+  const [polls] = useTable((tables.poll ?? {}) as any);
 
   // Filter to current session
   const sessionSignals = signals.filter((r: any) => r.session_id === sessionId);
   const sessionInterventions = interventions.filter((r: any) => r.session_id === sessionId);
+  const sessionCaptions = captions.filter((r: any) => r.session_id === sessionId);
   const sessionQuestions = questions.filter((r: any) => r.session_id === sessionId && !r.dismissed);
   const sessionMoodWords = moodWords.filter((r: any) => r.session_id === sessionId);
   const sessionPolls = polls.filter((r: any) => r.session_id === sessionId);
 
   // Reducer callers
-  const reducers = conn?.reducers;
+  const reducers = connection?.reducers as any;
 
   return {
     signals: sessionSignals,
     interventions: sessionInterventions,
+    captions: sessionCaptions,
     questions: sessionQuestions,
     moodWords: sessionMoodWords,
     polls: sessionPolls,
@@ -36,6 +41,7 @@ export function useSpacetimeSession(sessionId: string) {
       submitSignal: reducers?.submitSignal.bind(reducers),
       logIntervention: reducers?.logIntervention.bind(reducers),
       acknowledgeIntervention: reducers?.acknowledgeIntervention.bind(reducers),
+      submitCaption: reducers?.submitCaption?.bind(reducers),
       submitQuestion: reducers?.submitQuestion.bind(reducers),
       upvoteQuestion: reducers?.upvoteQuestion.bind(reducers),
       dismissQuestion: reducers?.dismissQuestion.bind(reducers),

@@ -1,8 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
+import InterventionCard from '@/components/InterventionCard';
+import useSpeechTranscript from '@/lib/useSpeechTranscript';
+import useAudioRecorder from '@/lib/useAudioRecorder';
+import VoicePlayer from '@/components/VoicePlayer';
+import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 
 // Room state distilled to a single ambient signal
 type RoomState = 'good' | 'check' | 'confused' | 'fast' | 'slow';
@@ -46,15 +51,101 @@ export default function SpeakerView() {
   const [mounted,  setMounted]  = useState(false);
   const [aiMsg,    setAiMsg]    = useState<string | null>(null);
   const [dark,     setDark]     = useState(true);
+  const transcript = useSpeechTranscript();
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [aiPausedUntil, setAiPausedUntil] = useState(0);
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [sessionEnded, setSessionEnded] = useState(false);
+  const [ttsAudioBase64, setTtsAudioBase64] = useState<string | null>(null);
+  const [ttsContentType, setTtsContentType] = useState<string | null>(null);
+  const DEBUG = true;
+
+  const countsRef = useRef(counts);
+  const aiMsgRef = useRef(aiMsg);
+  const aiPausedUntilRef = useRef(aiPausedUntil);
+  const cooldownUntilRef = useRef(0);
+  const lastCaptionRef = useRef('');
+  const lastCaptionSentAt = useRef(0);
+
+  const spacetime = useSpacetimeSession(sessionId);
+
+  const audioRecorder = useAudioRecorder({
+    sessionId,
+    enabled: sessionStarted && micEnabled,
+    chunkMs: 30_000,
+    onUploaded: (id) => {
+      if (DEBUG) console.log('[PULSE][Phase3][Audio] stored chunk', id);
+    },
+  });
+
+  useEffect(() => {
+    if (!audioRecorder.supported && DEBUG) {
+      console.log('[PULSE][Phase3][Audio] MediaRecorder not supported');
+    }
+  }, [audioRecorder.supported]);
+
+  useEffect(() => {
+    if (audioRecorder.lastError && DEBUG) {
+      console.log('[PULSE][Phase3][Audio] error', audioRecorder.lastError);
+    }
+  }, [audioRecorder.lastError]);
 
   useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    // Keep refs in sync for a stable interval callback.
+    countsRef.current = counts;
+  }, [counts]);
+
+  useEffect(() => {
+    aiMsgRef.current = aiMsg;
+  }, [aiMsg]);
+
+  useEffect(() => {
+    aiPausedUntilRef.current = aiPausedUntil;
+  }, [aiPausedUntil]);
+
+  useEffect(() => {
+    // Always stop recognition on unmount.
+    return () => { try { transcript.stop(); } catch {} };
+  }, [transcript]);
 
   useEffect(() => {
     if (!sessionId) return;
     fetch(`/api/session?sessionId=${sessionId}`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
+      .then(d => {
+        if (!d) return;
+        setSession({ speakerName: d.speakerName, topic: d.topic });
+        if (d.active === false) setSessionEnded(true);
+      });
   }, [sessionId]);
+
+  // Push final captions into SpacetimeDB (throttled)
+  useEffect(() => {
+    if (!sessionStarted || !captionsEnabled) return;
+    const finalText = transcript.finalText?.trim?.() || '';
+    if (!finalText || finalText === lastCaptionRef.current) return;
+    const now = Date.now();
+    if (now - lastCaptionSentAt.current < 1500) return;
+
+    if (!spacetime.reducers?.submitCaption) {
+      if (DEBUG) console.log('[PULSE][Phase3][Caption] reducer not ready');
+      return;
+    }
+
+    lastCaptionRef.current = finalText;
+    lastCaptionSentAt.current = now;
+
+    try {
+      const id = `${sessionId}:${now}`;
+      spacetime.reducers?.submitCaption?.(id, sessionId, finalText);
+      if (DEBUG) console.log('[PULSE][Phase3][Caption] submit', finalText.slice(0, 80));
+    } catch (e) {
+      if (DEBUG) console.log('[PULSE][Phase3][Caption] submit failed', String(e));
+    }
+  }, [sessionId, sessionStarted, captionsEnabled, transcript.finalText, spacetime.reducers, DEBUG]);
 
   // SSE — live signal counts
   useEffect(() => {
@@ -71,11 +162,73 @@ export default function SpeakerView() {
         } else if (msg.type === 'intervention') {
           setAiMsg(msg.message ?? null);
           setTimeout(() => setAiMsg(null), 8000);
+          if (DEBUG) console.log('[PULSE][Phase3][SSE] intervention', msg);
         }
       } catch { /* ignore */ }
     };
     return () => es.close();
   }, [sessionId]);
+
+  // Periodic AI intervention check — every 8s, guarded by simple local checks
+  useEffect(() => {
+    if (!sessionId || !sessionStarted || sessionEnded) return;
+    const interval = setInterval(async () => {
+      try {
+        // Guards: AI paused, cooldown, or intervention currently visible
+        if (Date.now() < aiPausedUntilRef.current) return;
+        if (Date.now() < cooldownUntilRef.current) return;
+        if (aiMsgRef.current) return;
+
+        const curCounts = countsRef.current;
+        const roomState = getRoomState(curCounts);
+        if (roomState === 'good') return;
+
+        const last60 = transcript.getLast60s();
+        const confused = curCounts['confused'] ?? 0;
+        const hasTranscript = !!last60 && last60.length >= 20;
+        if (!hasTranscript && confused < 2) return;
+
+        const res = await fetch('/api/intervene', {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId,
+            transcript: last60,
+            signals: curCounts,
+            enableTts: true,
+          }),
+          headers: { 'Content-Type': 'application/json' },
+        });
+
+        if (res.status === 429) {
+          const d = await res.json().catch(() => ({} as any));
+          const retryAfterSec = typeof d?.retryAfter === 'number' ? d.retryAfter : 15;
+          cooldownUntilRef.current = Date.now() + retryAfterSec * 1000;
+          return;
+        }
+        if (res.status === 409) {
+          // pending ack / ended — back off a bit
+          cooldownUntilRef.current = Date.now() + 15_000;
+          return;
+        }
+        if (res.ok) {
+          const data = await res.json().catch(() => null) as any;
+          if (DEBUG) console.log('[PULSE][Phase3][Intervene] ok', data?.intervention?.id);
+          if (data?.ttsAudioBase64) {
+            setTtsAudioBase64(data.ttsAudioBase64);
+            setTtsContentType(data.ttsContentType || 'audio/mpeg');
+          }
+          // Match server cooldown to avoid hammering
+          cooldownUntilRef.current = Date.now() + 90_000;
+        } else {
+          cooldownUntilRef.current = Date.now() + 15_000;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }, 8_000);
+
+    return () => { clearInterval(interval); };
+  }, [sessionId, sessionStarted, sessionEnded, transcript]);
 
   if (!mounted) return null;
 
@@ -88,6 +241,7 @@ export default function SpeakerView() {
   const whisper = dark ? 'bg-white/5 border-white/10 text-white/70' : 'bg-black/5 border-black/10 text-black/60';
   const bottomText = dark ? 'text-white/20' : 'text-black/20';
   const bottomSub = dark ? 'text-white/30' : 'text-black/30';
+  const aiPaused = Date.now() < aiPausedUntil;
 
   return (
     <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${bg}`}>
@@ -98,10 +252,106 @@ export default function SpeakerView() {
         dark={dark}
         onToggleDark={() => setDark(v => !v)}
         signalCount={total}
+        micSupported={transcript.supported}
+        micEnabled={micEnabled}
+        onToggleMic={async () => {
+          if (!sessionStarted) {
+            if (DEBUG) console.log('[PULSE][Phase3][Mic] start session first');
+            return;
+          }
+          if (!transcript.supported) return;
+          if (micEnabled) {
+            try { transcript.stop(); } catch {}
+            setMicEnabled(false);
+            if (DEBUG) console.log('[PULSE][Phase3][Mic] off');
+            return;
+          }
+          try {
+            transcript.start();
+            setMicEnabled(true);
+            if (DEBUG) console.log('[PULSE][Phase3][Mic] on');
+          } catch {
+            setMicEnabled(false);
+          }
+        }}
+        aiPaused={aiPaused}
+        onToggleAiPause={() => {
+          if (!sessionStarted) {
+            if (DEBUG) console.log('[PULSE][Phase3][AI] start session first');
+            return;
+          }
+          if (aiPaused) setAiPausedUntil(0);
+          else setAiPausedUntil(Date.now() + 120_000);
+          if (DEBUG) console.log('[PULSE][Phase3][AI] pause toggled', !aiPaused);
+        }}
+        captionsEnabled={captionsEnabled}
+        onToggleCaptions={() => {
+          if (!sessionStarted) {
+            if (DEBUG) console.log('[PULSE][Phase3][Captions] start session first');
+            return;
+          }
+          setCaptionsEnabled(v => !v);
+          if (DEBUG) console.log('[PULSE][Phase3][Captions] toggle');
+        }}
+        onEndSession={async () => {
+          if (!sessionStarted) return;
+          try {
+            await fetch('/api/session/end', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId }),
+            });
+            try { spacetime.reducers?.endSession?.(sessionId); } catch {}
+            setSessionEnded(true);
+            setSessionStarted(false);
+            setMicEnabled(false);
+            setCaptionsEnabled(false);
+            try { transcript.stop(); } catch {}
+            if (DEBUG) console.log('[PULSE][Phase3][Session] ended');
+          } catch (e) {
+            if (DEBUG) console.log('[PULSE][Phase3][Session] end failed', String(e));
+          }
+        }}
+      />
+
+      <InterventionCard sessionId={sessionId} />
+
+      <VoicePlayer
+        text={null}
+        audioBase64={ttsAudioBase64}
+        audioContentType={ttsContentType}
+        enabled={sessionStarted}
+        onDone={() => {
+          setTtsAudioBase64(null);
+          setTtsContentType(null);
+        }}
       />
 
       {/* Single ambient indicator */}
       <div className="flex flex-col items-center justify-center flex-1 gap-6">
+        {!sessionStarted && !sessionEnded && (
+          <button
+            onClick={() => {
+              setSessionStarted(true);
+              setCaptionsEnabled(true);
+              if (DEBUG) console.log('[PULSE][Phase3][Session] started');
+              try {
+                transcript.start();
+                setMicEnabled(true);
+              } catch {
+                setMicEnabled(false);
+              }
+            }}
+            className="px-6 py-3 rounded-full bg-white/90 text-black text-sm font-semibold shadow"
+          >
+            Start Session
+          </button>
+        )}
+        {sessionEnded && (
+          <div className="px-4 py-2 rounded-full border border-red-400 text-red-500 text-xs uppercase tracking-widest">
+            Session Ended
+          </div>
+        )}
         <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
           <div className="flex flex-col items-center gap-1 text-center">
             <span className={`text-lg font-semibold transition-colors duration-700 ${cfg.color}`}>
@@ -118,6 +368,19 @@ export default function SpeakerView() {
           </div>
         )}
       </div>
+
+      {/* Live captions */}
+      {sessionStarted && captionsEnabled && (
+        <div className={`px-6 pb-3 text-center text-sm ${bottomSub}`}>
+          {transcript.liveText || 'Listening…'}
+        </div>
+      )}
+
+      {sessionStarted && (
+        <div className={`px-6 pb-2 text-center text-[11px] ${bottomSub}`}>
+          Audio chunk: {audioRecorder.lastFileId || 'waiting…'}
+        </div>
+      )}
 
       {/* Audience join link — bottom */}
       <div className="flex flex-col items-center gap-1 pb-6">
