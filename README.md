@@ -13,22 +13,22 @@ Built for HackByte 4.0 — SpacetimeDB track.
 **For the audience (mobile)**
 - Send real-time emoji signals: confused, clear, excited, slow down, question
 - Submit typed questions that others can upvote
-- Tap "I need an example" — when 3+ people hit it simultaneously, AI fires immediately
-- Respond to mood prompts after AI interventions (builds a live word cloud)
-- Vote on live polls launched by the speaker
+- Respond to mood prompts after AI interventions
 
 **For the speaker (dashboard)**
-- Live pulse visualizer showing room sentiment in real time
+- Single ambient circle indicator — one glanceable signal (good / check / confused / fast / slow)
 - Floating emoji reactions drifting up the screen as signals arrive
-- AI listens to what you're saying via Deepgram streaming STT — suggestions are specific to your words, not generic
-- AI interventions spoken aloud via ElevenLabs (high urgency only — medium/low appear silently)
-- Pause AI voice with one tap when you're in flow
-- Pace meter showing if you're going too fast, too slow, or just right
-- Live engagement timeline — see exactly when you lost the room and recovered
-- AI-generated clarifying questions — pick one, it appears on all audience phones
-- Live question queue sorted by upvotes
-- Launch quick polls — results stream back as a live bar chart
-- Mood word cloud built from audience responses after each intervention
+- AI listens via Deepgram streaming STT — suggestions are specific to your words
+- AI interventions spoken aloud via ElevenLabs (high urgency only)
+- Pause AI voice with one tap
+- Live questions panel with Agent 3 classification (urgency, category, theme tags)
+- Post-session coaching report with segment-by-segment analysis
+
+**For the producer (backstage dashboard)**
+- Full signal analytics: Room Pulse, pace meter, engagement timeline, signal totals
+- Real-time suggestion cards from Agent 2 (Suggester) with urgency-based auto-dismiss
+- Questions tab with Agent 3 classification enrichment
+- Post-session: full archive from MongoDB — signals, questions, suggestions, coach report
 
 ---
 
@@ -36,10 +36,12 @@ Built for HackByte 4.0 — SpacetimeDB track.
 
 ### Prerequisites
 - Node.js 18+
-- A Gemini API key ([get one here](https://aistudio.google.com))
-- A Deepgram API key ([get one here](https://deepgram.com))
-- An ElevenLabs API key ([get one here](https://elevenlabs.io))
-- SpacetimeDB CLI ([view here](https://spacetimedb.com/install)) Linux-> (`curl -sSf https://install.spacetimedb.com | sh`)
+- Gemini API key ([aistudio.google.com](https://aistudio.google.com))
+- Deepgram API key ([deepgram.com](https://deepgram.com))
+- ElevenLabs API key ([elevenlabs.io](https://elevenlabs.io))
+- MongoDB connection string
+- SpacetimeDB CLI ([spacetimedb.com/install](https://spacetimedb.com/install))
+- ArmorIQ API key ([platform.armoriq.ai](https://platform.armoriq.ai)) — optional, enables security layer
 
 ### Setup
 
@@ -49,18 +51,31 @@ cd pulse
 npm install
 ```
 
-Fill in `.env.local`:
+Copy `.env.local.example` to `.env` and fill in:
 
 ```bash
 NEXT_PUBLIC_SPACETIMEDB_URL=wss://maincloud.spacetimedb.com
 NEXT_PUBLIC_SPACETIMEDB_MODULE=pulse
-GEMINI_API_KEY=your_key_here
-NEXT_PUBLIC_DEEPGRAM_API_KEY=your_key_here
+NEXT_PUBLIC_APP_URL=https://your-domain.com
+
+GEMINI_API_KEY=your_key
+GEMINI_MODEL=gemini-2.0-flash
+
+NEXT_PUBLIC_DEEPGRAM_API_KEY=your_key
 NEXT_PUBLIC_DEEPGRAM_MODEL=nova-2
 NEXT_PUBLIC_DEEPGRAM_LANGUAGE=en-US
-ELEVENLABS_API_KEY=your_key_here
-ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
-NEXT_PUBLIC_APP_URL=http://localhost:3001
+
+ELEVENLABS_API_KEY=your_key
+ELEVENLABS_VOICE_ID=EXAVITQu4vr4xnSDxMaL
+
+MONGODB_URI=mongodb+srv://...
+JWT_SECRET=your_secret
+
+# ArmorIQ (optional — agents fall back to direct Gemini if absent)
+ARMORIQ_API_KEY=ak_live_...
+USER_ID=pulse-system
+AGENT_ID=pulse-agent-v1
+SUGGEST_AGENT_SECRET=your_random_secret
 ```
 
 ### SpacetimeDB setup (first time)
@@ -73,12 +88,8 @@ npm run stdb:generate   # generate TypeScript client bindings
 ### Run
 
 ```bash
-npm run dev
+npm run dev             # webpack mode on port 3001
 ```
-
-Open `http://localhost:3001`, enter your name and topic, click "Start presenting."
-
-Share the audience URL or QR code with your audience.
 
 ---
 
@@ -87,53 +98,82 @@ Share the audience URL or QR code with your audience.
 ```
 pulse/
 ├── app/
-│   ├── page.tsx                    # Landing — create session
-│   ├── speaker/[sessionId]/        # Speaker dashboard
-│   ├── audience/[sessionId]/       # Audience mobile view
+│   ├── page.tsx                        # Landing — create session
+│   ├── speaker/[sessionId]/page.tsx    # Speaker ambient view
+│   ├── audience/[sessionId]/page.tsx   # Audience mobile view
+│   ├── producer/[sessionId]/page.tsx   # Producer analytics dashboard
 │   └── api/
-│       ├── session/                # Session create/get
-│       ├── signals/                # Real-time signal stream (SSE)
-│       ├── intervene/              # Gemini AI intervention trigger
-│       ├── interventions/stream/   # SSE stream to audience phones
-│       ├── questions/              # Question submit/upvote/dismiss
-│       ├── mood/                   # Post-intervention mood words
-│       ├── example/                # "Need example" threshold trigger
-│       ├── clarify/                # AI clarifying question generation + broadcast
-│       ├── poll/                   # Poll create/vote/close
-│       └── tts/                    # ElevenLabs text-to-speech proxy
+│       ├── session/                    # Session CRUD + /end + /archive + /primary
+│       ├── signals/                    # SSE signal stream + snapshot
+│       ├── questions/                  # Question submit (+ Agent 3) / upvote / dismiss
+│       ├── suggest/                    # Agent 2 Suggester endpoint (ArmorIQ secured)
+│       ├── intervene/                  # Gemini intervention trigger + ack
+│       ├── summary/                    # 60s caption summary → SegmentSummary
+│       ├── coach/                      # Post-session CoachReport compilation
+│       ├── transcript/                 # Transcript fetch from SegmentSummary
+│       ├── chat/                       # Audience Q&A chat (Gemini)
+│       ├── tts/                        # ElevenLabs TTS proxy
+│       ├── audio/                      # Audio chunk upload/list
+│       └── deepgram-token/             # Deepgram token endpoint
 ├── components/
-│   ├── PulseVisualizer.tsx         # Animated pulse circle + signal bars
-│   ├── FloatingReactions.tsx       # Emoji reactions drifting up the screen
-│   ├── SignalButtons.tsx           # Audience signal buttons
-│   ├── ExampleButton.tsx           # "I need an example" button
-│   ├── ExampleCounter.tsx          # Speaker-side example request counter
-│   ├── InterventionCard.tsx        # AI intervention card (urgency-aware)
-│   ├── VoicePlayer.tsx             # ElevenLabs audio playback
-│   ├── QuestionQueue.tsx           # Speaker question queue
-│   ├── QuestionInput.tsx           # Audience question submission
-│   ├── MoodWordCloud.tsx           # Live word cloud (pure CSS/SVG)
-│   ├── MoodPrompt.tsx              # Post-intervention mood prompt overlay
-│   ├── AudiencePoll.tsx            # Poll voting overlay on audience phone
-│   ├── AudienceClarify.tsx         # Clarifying question banner on audience phone
-│   ├── PollCreator.tsx             # Speaker poll creation + live results
-│   ├── ClarifyingQuestions.tsx     # AI question generation + broadcast
-│   ├── PaceMeter.tsx               # Pace indicator
-│   ├── EngagementTimeline.tsx      # Live SVG sentiment timeline
-│   └── SpacetimeProvider.tsx       # SpacetimeDB connection provider
+│   ├── PulseVisualizer.tsx             # Animated pulse circle + signal bars
+│   ├── FloatingReactions.tsx           # Emoji reactions drifting up
+│   ├── SignalButtons.tsx               # Audience signal buttons
+│   ├── InterventionCard.tsx            # AI intervention overlay (speaker)
+│   ├── SuggestionCard.tsx              # Agent 2 suggestion overlay (producer)
+│   ├── SessionReport.tsx               # Post-session coach report cards
+│   ├── DashboardNav.tsx                # Shared nav bar
+│   └── SpacetimeProvider.tsx           # SpacetimeDB connection provider
 ├── lib/
-│   ├── gemini.ts                   # Gemini API — intervention reasoning with transcript
-│   ├── elevenlabs.ts               # ElevenLabs TTS
-│   ├── moderation.ts               # Gemini content moderation for questions
-│   ├── fingerprint.ts              # Device fingerprinting (abuse prevention)
-│   ├── session.ts                  # Session ID generation
-│   ├── useSpeechTranscript.ts      # Deepgram streaming STT — live transcript buffer
-│   ├── models/SegmentSummary.ts    # 60s caption summaries stored in MongoDB
-│   └── useSpacetimeSession.ts      # SpacetimeDB table subscriptions + reducers
-├── src/
-│   └── module_bindings/            # Auto-generated SpacetimeDB TypeScript bindings
-└── spacetime/
-    └── src/index.ts                # SpacetimeDB module — tables + reducers
+│   ├── armoriq.ts                      # ArmorIQ SDK integration + agent registry
+│   ├── agents/
+│   │   ├── suggester.ts                # Agent 2 system prompt + prompt builder
+│   │   ├── question-classifier.ts      # Agent 3 system prompt + prompt builder
+│   │   └── runner.ts                   # Gemini runner for both agents
+│   ├── gemini.ts                       # analyzeIntervention + summarizeSegment + compileCoachReport
+│   ├── elevenlabs.ts                   # ElevenLabs TTS
+│   ├── fingerprint.ts                  # Device fingerprinting
+│   ├── session.ts                      # Session ID generation
+│   ├── useSpeechTranscript.ts          # Deepgram streaming STT
+│   ├── useSpacetimeSession.ts          # SpacetimeDB subscriptions + reducers
+│   ├── useTheme.ts                     # Dark/light mode
+│   └── models/
+│       ├── Session.ts                  # Session + signals + questions + interventions
+│       ├── SegmentSummary.ts           # 60s caption summaries
+│       ├── CoachReport.ts              # Post-session coaching report
+│       └── Suggestion.ts              # Live suggestions with escalation history
+├── src/module_bindings/                # Auto-generated SpacetimeDB bindings
+└── spacetime/src/index.ts              # SpacetimeDB module — tables + reducers
 ```
+
+---
+
+## AI Agent Architecture
+
+```
+Speaker voice
+    ↓ Deepgram STT
+Raw transcript chunks
+    ↓
+    ├── MongoDB (SegmentSummary)
+    │       ↓
+    │   Agent 1 (Gemini) — summarizeSegment
+    │   → segment summaries stored for coach report
+    │
+    ├── Agent 2 — Suggester (ArmorIQ secured)
+    │   Receives: transcript + signals + classified questions + previous suggestions
+    │   Produces: real-time improvement suggestions for producer
+    │   Urgency: urgent (manual dismiss) / medium (60s) / low (30s)
+    │   Escalation: detects repeated mistakes → upgrades to urgent
+    │
+    └── Agent 3 — Question Classifier (ArmorIQ secured)
+        Triggered: on every audience question submission
+        Receives: question + session topic + recent transcript + existing questions
+        Produces: category, urgency, relevance, duplicate detection, theme tag
+        Decides: whether to forward to Agent 2
+```
+
+**ArmorIQ's role:** Cryptographic intent verification proxy. Every call to `/api/suggest` and `/api/questions` is verified by ArmorIQ before reaching the handler. The agents themselves run on Gemini — ArmorIQ does not proxy LLM calls, it secures the API surface.
 
 ---
 
@@ -141,14 +181,15 @@ pulse/
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 15 (App Router) |
+| Framework | Next.js 16 (App Router, webpack) |
 | Styling | Tailwind CSS v4 |
 | Real-time state | SpacetimeDB (cloud) |
 | Real-time transport | Server-Sent Events (SSE) |
-| AI reasoning | Google Gemini 3 Flash |
+| AI reasoning | Google Gemini 2.0 Flash |
 | Speech recognition | Deepgram streaming STT |
 | Voice | ElevenLabs TTS |
-| QR codes | react-qrcode-logo |
+| Database | MongoDB (Mongoose) |
+| Agent security | ArmorIQ SDK |
 | Language | TypeScript |
 
 ---
@@ -159,47 +200,42 @@ pulse/
 |---|---|---|
 | `NEXT_PUBLIC_SPACETIMEDB_URL` | Yes | SpacetimeDB WebSocket URL |
 | `NEXT_PUBLIC_SPACETIMEDB_MODULE` | Yes | SpacetimeDB module name |
+| `NEXT_PUBLIC_APP_URL` | Yes | Public URL (CORS + QR codes) |
 | `GEMINI_API_KEY` | Yes | Google Gemini API key |
-| `NEXT_PUBLIC_DEEPGRAM_API_KEY` | Yes | Deepgram API key (client-side streaming) |
+| `GEMINI_MODEL` | No | Model name (default `gemini-2.0-flash`) |
+| `NEXT_PUBLIC_DEEPGRAM_API_KEY` | Yes | Deepgram API key |
 | `NEXT_PUBLIC_DEEPGRAM_MODEL` | No | Deepgram model (default `nova-2`) |
-| `NEXT_PUBLIC_DEEPGRAM_LANGUAGE` | No | Deepgram language (default `en-US`) |
 | `ELEVENLABS_API_KEY` | Yes | ElevenLabs API key |
 | `ELEVENLABS_VOICE_ID` | No | Voice ID (defaults to Rachel) |
-| `NEXT_PUBLIC_APP_URL` | No | Public URL for QR code generation |
+| `MONGODB_URI` | Yes | MongoDB connection string |
+| `JWT_SECRET` | Yes | JWT signing secret |
+| `ARMORIQ_API_KEY` | No | ArmorIQ API key (`ak_live_...`) |
+| `USER_ID` | No | ArmorIQ user identifier |
+| `AGENT_ID` | No | ArmorIQ agent identifier |
+| `SUGGEST_AGENT_SECRET` | No | Bearer token for `/api/suggest` auth |
 
 ---
 
 ## SpacetimeDB Scripts
 
 ```bash
-npm run stdb:publish    # compile + publish module to SpacetimeDB
+npm run stdb:publish    # compile + publish module
 npm run stdb:generate   # generate TypeScript client bindings
 npm run stdb:logs       # tail live module logs
 ```
 
 ---
 
-## AI Intervention Design
+## Security
 
-The AI is designed to be a coach, not a heckler. Key constraints:
-
-- 90-second minimum cooldown between interventions
-- Won't fire while voice is still playing
-- Won't fire if the speaker hasn't acknowledged the last intervention
-- Speaker can pause AI voice for 2 minutes with one tap
-- Only HIGH urgency interventions are spoken aloud — medium/low appear silently as cards
-- Gemini receives the last 60 seconds of Deepgram captions (buffered in SpacetimeDB) so suggestions are specific to what was actually being said, not generic
-
----
-
-## Security & Abuse Prevention
-
-- Device fingerprinting — SHA-256 hash of browser signals rate-limits by device, not session ID
-- Per-user cooldowns — 10s signals, 30s questions, 15s example button (server-enforced)
-- Statistical outlier detection — one user dominating >60% of signals gets weight 0.2
-- Variance tracking — flip-flopping users get down-weighted
-- Question moderation — every question checked by Gemini before reaching the speaker
+- Device fingerprinting — SHA-256 rate-limits by device
+- Per-user cooldowns — 10s signals, 30s questions (server-enforced)
 - 12-character session IDs — 36^12 ≈ 4.7 trillion combinations
+- ArmorIQ cryptographic intent verification on agent endpoints
+- Rate limiting with `X-RateLimit-*` headers on `/api/suggest`
+- 1MB payload size limit on all agent routes
+- PII masking — internal fields stripped from all API responses
+- CORS restricted to `pulse.venoms.app` and `localhost`
 
 ---
 
