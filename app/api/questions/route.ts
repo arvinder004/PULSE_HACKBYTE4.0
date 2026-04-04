@@ -79,3 +79,25 @@ export async function GET(req: NextRequest) {
     result.sort((a, b) => b.upvotes - a.upvotes || a.ts - b.ts)
   );
 }
+
+// DELETE — remove a single question by id, or all questions for a session
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const id        = searchParams.get('id');
+  const sessionId = searchParams.get('sessionId');
+
+  if (id) {
+    questions.delete(id);
+    return NextResponse.json({ ok: true, deleted: id });
+  }
+
+  if (sessionId) {
+    let count = 0;
+    for (const [key, q] of questions.entries()) {
+      if (q.sessionId === sessionId) { questions.delete(key); count++; }
+    }
+    return NextResponse.json({ ok: true, cleared: count });
+  }
+
+  return NextResponse.json({ error: 'Provide id or sessionId' }, { status: 400 });
+}

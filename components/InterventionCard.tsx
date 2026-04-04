@@ -8,11 +8,13 @@ type Intervention = {
   suggestion?: string;
   urgency?: string;
   createdAt?: string;
+  expiresAt: number; // epoch ms
 };
 
-export default function InterventionCard({ sessionId }: { sessionId: string }) {
+const AUTO_DISMISS_MS = 45_000; // 45s auto-dismiss
+
+export default function InterventionCard({ sessionId, dark = true }: { sessionId: string; dark?: boolean }) {
   const [cards, setCards] = useState<Intervention[]>([]);
-  const DEBUG = true;
 
   useEffect(() => {
     if (!sessionId) return;
@@ -22,52 +24,68 @@ export default function InterventionCard({ sessionId }: { sessionId: string }) {
         const msg = JSON.parse(e.data);
         if (msg.type === 'intervention') {
           const itv: Intervention = {
-            id: msg.id ?? String(Date.now()),
-            message: msg.message ?? msg.message,
-            suggestion: msg.suggestion ?? msg.suggestion,
-            urgency: msg.urgency ?? 'low',
-            createdAt: new Date().toISOString(),
+            id:         msg.id ?? String(Date.now()),
+            message:    msg.message ?? '',
+            suggestion: msg.suggestion,
+            urgency:    msg.urgency ?? 'low',
+            createdAt:  new Date().toISOString(),
+            expiresAt:  Date.now() + AUTO_DISMISS_MS,
           };
-          if (DEBUG) console.log('[PULSE][Phase3][Card] intervention', itv);
-          setCards((c) => [itv, ...c].slice(0, 5));
-          // Auto-remove after 8s
-          setTimeout(() => setCards((c) => c.filter((x) => x.id !== itv.id)), 8000);
+          setCards(c => [itv, ...c].slice(0, 3));
+          setTimeout(() => setCards(c => c.filter(x => x.id !== itv.id)), AUTO_DISMISS_MS);
         }
-      } catch (err) {
-        // ignore
-      }
+        if (msg.type === 'intervention_ack') {
+          setCards(c => c.filter(x => x.id !== msg.interventionId));
+        }
+      } catch {}
     };
     return () => es.close();
   }, [sessionId]);
 
+  async function dismiss(id: string) {
+    try {
+      await fetch('/api/intervene/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, interventionId: id }),
+      });
+    } catch {}
+    setCards(c => c.filter(x => x.id !== id));
+  }
+
   if (cards.length === 0) return null;
 
+  const border = dark ? 'border-white/10 bg-black/80 text-white' : 'border-black/10 bg-white/95 text-black';
+  const sub    = dark ? 'text-white/50' : 'text-black/50';
+  const btn    = dark ? 'text-white/30 hover:text-white' : 'text-black/30 hover:text-black';
+
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-3">
-      {cards.map((c) => (
-        <div key={c.id} className="w-80 bg-white/95 dark:bg-black/80 border rounded-lg shadow-lg p-3">
-          <div className="flex justify-between items-start gap-2">
-            <div className="text-sm font-semibold">{c.message}</div>
+    <div className="fixed top-14 right-4 z-50 flex flex-col gap-2 w-80">
+      {cards.map(c => (
+        <div key={c.id} className={`border rounded-xl shadow-xl p-4 backdrop-blur-sm animate-fade-in ${border}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full border ${
+                  c.urgency === 'high'   ? 'border-red-400 text-red-400' :
+                  c.urgency === 'medium' ? 'border-yellow-400 text-yellow-400' :
+                                           'border-zinc-500 text-zinc-400'
+                }`}>
+                  {c.urgency}
+                </span>
+              </div>
+              <p className="text-sm font-medium leading-snug">{c.message}</p>
+              {c.suggestion && <p className={`text-xs mt-1 leading-relaxed ${sub}`}>{c.suggestion}</p>}
+            </div>
+            {/* Dismiss button */}
             <button
-              className="text-xs text-gray-500 hover:text-gray-700"
-              onClick={async () => {
-                // acknowledge via API then remove locally
-                try {
-                  await fetch('/api/intervene/ack', { method: 'POST', body: JSON.stringify({ sessionId, interventionId: c.id }), headers: { 'Content-Type': 'application/json' } });
-                } catch {}
-                if (DEBUG) console.log('[PULSE][Phase3][Card] ack', c.id);
-                setCards((cur) => cur.filter(x => x.id !== c.id));
-              }}
+              onClick={() => dismiss(c.id)}
+              className={`text-lg leading-none mt-0.5 transition-colors ${btn}`}
+              aria-label="Dismiss"
             >
-              Ack
+              ✕
             </button>
           </div>
-          <div className="mt-1 flex items-center gap-2">
-            <span className={`text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full border ${c.urgency === 'high' ? 'border-red-400 text-red-500' : c.urgency === 'medium' ? 'border-yellow-400 text-yellow-500' : 'border-zinc-300 text-zinc-400'}`}>
-              {c.urgency || 'low'}
-            </span>
-          </div>
-          {c.suggestion && <div className="text-xs text-gray-600 mt-1">{c.suggestion}</div>}
         </div>
       ))}
     </div>

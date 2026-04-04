@@ -30,6 +30,7 @@ const sseClients = g.__pulse_sse_clients;
 const primaryMap = g.__pulse_primary;
 
 const COOLDOWN_MS = 10_000;
+const SIGNAL_TTL_MS = 45 * 1000; // signals expire after 45 seconds
 
 function broadcast(sessionId: string, data: object) {
   const clients = sseClients.get(sessionId);
@@ -85,6 +86,12 @@ export async function POST(req: NextRequest) {
 
   broadcast(sessionId, { type: 'signal', signal });
 
+  // After 45s, broadcast a refreshed snapshot so all clients drop this signal
+  setTimeout(() => {
+    const counts = buildPrimaryCounts(sessionId);
+    broadcast(sessionId, { type: 'snapshot', counts });
+  }, 45_000);
+
   return NextResponse.json({ ok: true, isPrimary });
 }
 
@@ -96,6 +103,7 @@ export async function GET(req: NextRequest) {
 
   if (!sessionId) return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 });
 
+  // Snapshot mode — returns raw signals for client-side TTL filtering
   if (!sse) {
     const result = signals.filter(s => s.sessionId === sessionId);
     return NextResponse.json(result);
@@ -108,7 +116,7 @@ export async function GET(req: NextRequest) {
   const stream = new ReadableStream({
     start(ctrl) {
       clients.add(ctrl);
-      // Send current primary-only counts immediately on connect
+      // Send current primary-only counts (within TTL) immediately on connect
       const counts = buildPrimaryCounts(sessionId);
       ctrl.enqueue(`data: ${JSON.stringify({ type: 'snapshot', counts })}\n\n`);
     },
@@ -127,12 +135,32 @@ export async function GET(req: NextRequest) {
 }
 
 // Only count signals from the primary user (or all if no primary set)
+// Signals older than SIGNAL_TTL_MS are excluded
 function buildPrimaryCounts(sessionId: string) {
   const primaryId = primaryMap.get(sessionId) ?? null;
+  const cutoff    = Date.now() - SIGNAL_TTL_MS;
   const counts: Record<string, number> = {};
-  for (const s of signals.filter(sig => sig.sessionId === sessionId)) {
+  for (const s of signals.filter(sig => sig.sessionId === sessionId && sig.ts >= cutoff)) {
     if (primaryId && !s.isPrimary) continue;
     counts[s.signalType] = (counts[s.signalType] ?? 0) + 1;
   }
   return counts;
+}
+
+// ── DELETE — clear all signals for a session ──────────────────────────────
+export async function DELETE(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const sessionId = searchParams.get('sessionId');
+  if (!sessionId) return NextResponse.json({ error: 'Missing sessionId' }, { status: 400 });
+
+  const before = signals.length;
+  // Remove all signals for this session in-place
+  const toRemove = signals.filter(s => s.sessionId === sessionId);
+  toRemove.forEach(s => signals.splice(signals.indexOf(s), 1));
+
+  // Broadcast cleared counts to all SSE listeners
+  broadcast(sessionId, { type: 'snapshot', counts: {} });
+
+  console.log('[PULSE][Signals] cleared', before - signals.length, 'signals for', sessionId);
+  return NextResponse.json({ ok: true, cleared: before - signals.length });
 }

@@ -303,11 +303,34 @@ export default function ProducerDashboard() {
                   {primaryQuestions.length === 0 ? (
                     <p className={`text-sm text-center ${T.muted}`}>No questions from the primary judge yet.</p>
                   ) : primaryQuestions.map((q, i) => (
-                    <div key={q.id} className={`p-4 rounded-xl border text-sm ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/80'}`}>
-                      <span className={`text-[10px] uppercase tracking-widest mr-2 ${T.muted}`}>Q{i + 1}</span>
-                      {q.text}
+                    <div key={q.id} className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/80'}`}>
+                      <div className="flex-1">
+                        <span className={`text-[10px] uppercase tracking-widest mr-2 ${T.muted}`}>Q{i + 1}</span>
+                        {q.text}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          await fetch(`/api/questions?id=${q.id}`, { method: 'DELETE' });
+                          setPrimaryQuestions(prev => prev.filter(x => x.id !== q.id));
+                        }}
+                        className={`text-sm shrink-0 transition-colors ${dark ? 'text-white/20 hover:text-red-400' : 'text-black/20 hover:text-red-500'}`}
+                        aria-label="Delete question"
+                      >
+                        ✕
+                      </button>
                     </div>
                   ))}
+                  {primaryQuestions.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        await fetch(`/api/questions?sessionId=${sessionId}`, { method: 'DELETE' });
+                        setPrimaryQuestions([]);
+                      }}
+                      className={`text-[10px] uppercase tracking-widest text-center mt-1 transition-colors ${dark ? 'text-white/20 hover:text-white/50' : 'text-black/20 hover:text-black/50'}`}
+                    >
+                      Clear all questions
+                    </button>
+                  )}
                 </div>
               )}
               {tab === 'clarify' && (

@@ -173,8 +173,6 @@ export default function SpeakerView() {
         } else if (msg.type === 'signal') {
           const key = msg.signal.signalType as string;
           setCounts(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
-          
-          // Add floating reaction
           const emoji = SIGNAL_EMOJI[key as SignalKey];
           if (emoji) {
             const id = ++reactionId.current;
@@ -190,6 +188,26 @@ export default function SpeakerView() {
       } catch { /* ignore */ }
     };
     return () => es.close();
+  }, [sessionId]);
+
+  // Poll server every 10s to get TTL-filtered counts (clears expired signals)
+  useEffect(() => {
+    if (!sessionId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/signals?sessionId=${sessionId}&snapshot=1`);
+        if (res.ok) {
+          const data = await res.json();
+          // data is array of raw signals — build counts from only recent ones
+          const cutoff = Date.now() - 45_000;
+          const fresh = (data as any[]).filter((s: any) => s.ts >= cutoff && s.isPrimary !== false);
+          const counts: Record<string, number> = { confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 };
+          for (const s of fresh) counts[s.signalType] = (counts[s.signalType] ?? 0) + 1;
+          setCounts(counts);
+        }
+      } catch {}
+    }, 10_000);
+    return () => clearInterval(interval);
   }, [sessionId]);
 
   // Periodic AI intervention check — every 8s, guarded by simple local checks
@@ -340,7 +358,7 @@ export default function SpeakerView() {
         }}
       />
 
-      <InterventionCard sessionId={sessionId} />
+      <InterventionCard sessionId={sessionId} dark={dark} />
 
       {/* Single ambient indicator */}
       <div className="flex flex-col items-center justify-center flex-1 gap-6">
@@ -405,33 +423,44 @@ export default function SpeakerView() {
 
         {/* Signal cards — only shown when count > 0, colored by intensity */}
         {total > 0 && (
-          <div className="flex flex-wrap justify-center gap-2 max-w-xs">
-            {([
-              { key: 'confused',  emoji: '😕', label: 'Confused',   danger: true  },
-              { key: 'slow_down', emoji: '🐢', label: 'Too fast',   danger: true  },
-              { key: 'question',  emoji: '✋', label: 'Question',   danger: false },
-              { key: 'clear',     emoji: '✅', label: 'Clear',      danger: false },
-              { key: 'excited',   emoji: '🔥', label: 'Excited',    danger: false },
-            ] as const).map(({ key, emoji, label, danger }) => {
-              const count = counts[key] ?? 0;
-              if (count === 0) return null;
-              const pct = total > 0 ? count / total : 0;
-              // Color intensity based on proportion
-              const intensity = danger
-                ? pct >= 0.5 ? 'bg-red-500/80 text-white ring-red-400/40'
-                  : pct >= 0.25 ? 'bg-orange-400/70 text-white ring-orange-400/30'
-                  : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10'
-                : pct >= 0.5 ? 'bg-emerald-500/70 text-white ring-emerald-400/30'
-                  : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10';
-              return (
-                <div key={key} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ring-1 text-xs font-medium transition-all duration-500 ${intensity}`}>
-                  <span>{emoji}</span>
-                  <span>{count}</span>
-                  <span className="opacity-70">{label}</span>
-                  <span className="opacity-50 text-[10px]">{Math.round(pct * 100)}%</span>
-                </div>
-              );
-            })}
+          <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-wrap justify-center gap-2 max-w-xs">
+              {([
+                { key: 'confused',  emoji: '😕', label: 'Confused',   danger: true  },
+                { key: 'slow_down', emoji: '🐢', label: 'Too fast',   danger: true  },
+                { key: 'question',  emoji: '✋', label: 'Question',   danger: false },
+                { key: 'clear',     emoji: '✅', label: 'Clear',      danger: false },
+                { key: 'excited',   emoji: '🔥', label: 'Excited',    danger: false },
+              ] as const).map(({ key, emoji, label, danger }) => {
+                const count = counts[key] ?? 0;
+                if (count === 0) return null;
+                const pct = total > 0 ? count / total : 0;
+                const intensity = danger
+                  ? pct >= 0.5 ? 'bg-red-500/80 text-white ring-red-400/40'
+                    : pct >= 0.25 ? 'bg-orange-400/70 text-white ring-orange-400/30'
+                    : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10'
+                  : pct >= 0.5 ? 'bg-emerald-500/70 text-white ring-emerald-400/30'
+                    : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10';
+                return (
+                  <div key={key} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ring-1 text-xs font-medium transition-all duration-500 ${intensity}`}>
+                    <span>{emoji}</span>
+                    <span>{count}</span>
+                    <span className="opacity-70">{label}</span>
+                    <span className="opacity-50 text-[10px]">{Math.round(pct * 100)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Clear signals button */}
+            <button
+              onClick={async () => {
+                await fetch(`/api/signals?sessionId=${sessionId}`, { method: 'DELETE' });
+                setCounts({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
+              }}
+              className={`text-[10px] uppercase tracking-widest transition-colors ${dark ? 'text-white/20 hover:text-white/50' : 'text-black/20 hover:text-black/50'}`}
+            >
+              Clear signals
+            </button>
           </div>
         )}
 
