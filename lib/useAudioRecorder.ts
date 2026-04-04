@@ -92,8 +92,10 @@ export default function useAudioRecorder({ sessionId, enabled, chunkMs = 30_000,
           }
         }
 
-        const blob   = new Blob([payload], { type: mimeType });
-        const result = await uploadChunk(blob, idx, startTs, endTs, mimeType);
+        const blobBytes = new Uint8Array(payload.byteLength);
+        blobBytes.set(payload);
+        const blob      = new Blob([blobBytes.buffer], { type: mimeType });
+        const result    = await uploadChunk(blob, idx, startTs, endTs, mimeType);
         if (result.ok && result.fileId) {
           setLastFileId(result.fileId);
           onUploaded?.(result.fileId);
