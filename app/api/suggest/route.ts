@@ -78,6 +78,20 @@ function sanitizeSuggestion(doc: any) {
   };
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+function verifyAgentAuth(req: NextRequest): boolean {
+  // ArmorIQ sends the credential in the Authorization header as "Bearer <token>"
+  // or as a raw value depending on the method chosen in the dashboard.
+  const authHeader = req.headers.get('authorization') ?? '';
+  const token = authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7).trim()
+    : authHeader.trim();
+
+  const secret = process.env.SUGGEST_AGENT_SECRET;
+  if (!secret) return true; // not configured — skip in dev
+  return token === secret;
+}
+
 function broadcastSuggestion(sessionId: string, payload: object) {
   const g = globalThis as any;
   const sseClients: Map<string, Set<ReadableStreamDefaultController>> = g.__pulse_sse_clients;
@@ -92,6 +106,9 @@ function broadcastSuggestion(sessionId: string, payload: object) {
 
 // ── POST — run the Suggester agent ────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  if (!verifyAgentAuth(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   // 1. Enforce request size limit
   const contentLength = Number(req.headers.get('content-length') ?? 0);
   if (contentLength > MAX_BODY_BYTES) {
@@ -214,6 +231,9 @@ export async function POST(req: NextRequest) {
 
 // ── GET — fetch all suggestions for a session ─────────────────────────────────
 export async function GET(req: NextRequest) {
+  if (!verifyAgentAuth(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get('sessionId');
 
@@ -238,6 +258,9 @@ export async function GET(req: NextRequest) {
 
 // ── PATCH — dismiss a suggestion ──────────────────────────────────────────────
 export async function PATCH(req: NextRequest) {
+  if (!verifyAgentAuth(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   const contentLength = Number(req.headers.get('content-length') ?? 0);
   if (contentLength > MAX_BODY_BYTES) {
     return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
