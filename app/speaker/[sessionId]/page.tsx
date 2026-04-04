@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
 import InterventionCard from '@/components/InterventionCard';
+import SuggestionCard from '@/components/SuggestionCard';
 import useSpeechTranscript from '@/lib/useSpeechTranscript';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
@@ -692,6 +693,7 @@ export default function SpeakerView() {
       />
 
       <InterventionCard sessionId={sessionId} dark={dark} />
+      {sessionStarted && !sessionEnded && <SuggestionCard sessionId={sessionId} dark={dark} />}
 
       {/* Single ambient indicator */}
       <div className="flex flex-col items-center justify-center flex-1 gap-6">

@@ -11,7 +11,7 @@ import SuggestionCard from '@/components/SuggestionCard';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 import { useTheme } from '@/lib/useTheme';
 
-type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
+type Tab = 'ai' | 'questions' | 'poll';
 
 type SignalKey = 'confused' | 'clear' | 'excited' | 'slow_down' | 'question';
 
@@ -34,7 +34,6 @@ const SIGNAL_TYPES = [
 const TABS: { id: Tab; label: string }[] = [
   { id: 'ai',        label: 'AI'        },
   { id: 'questions', label: 'Questions' },
-  { id: 'clarify',   label: 'Clarify'   },
   { id: 'poll',      label: 'Poll'      },
 ];
 
@@ -110,6 +109,10 @@ export default function ProducerDashboard() {
     id: string; message: string; detail: string; urgency: string;
     category: string; escalated: boolean; dismissed: boolean; createdAt: string;
   }>>([]);
+  // Live suggestions accumulate in real-time during active session
+  const [liveSuggestions, setLiveSuggestions] = useState<Array<{
+    id: string; message: string; detail: string; urgency: string; category: string; escalated: boolean; createdAt: string;
+  }>>([]);
   const reactionId = useRef(0);
 
   const isActive = session?.active ?? true; // assume active until we know otherwise
@@ -144,7 +147,7 @@ export default function ProducerDashboard() {
       });
   }, [sessionId, isActive]);
 
-  // ── ACTIVE SESSION: SSE for real-time signal updates ──────────────────────
+  // ── ACTIVE SESSION: SSE for real-time signal + suggestion updates ─────────
   useEffect(() => {
     if (!sessionId || !isActive) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
@@ -164,6 +167,24 @@ export default function ProducerDashboard() {
             setReactions(prev => [...prev.slice(-20), { id, emoji, x }]);
             setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
           }
+        } else if (msg.type === 'suggestion') {
+          // Accumulate in AI tab — never remove
+          setLiveSuggestions(prev => {
+            if (prev.find(s => s.id === msg.id)) return prev;
+            return [...prev, {
+              id:        msg.id,
+              message:   msg.message,
+              detail:    msg.detail,
+              urgency:   msg.urgency,
+              category:  msg.category,
+              escalated: msg.escalated ?? false,
+              createdAt: msg.createdAt,
+            }];
+          });
+        } else if (msg.type === 'suggestion_escalate') {
+          setLiveSuggestions(prev => prev.map(s =>
+            s.id === msg.suggestionId ? { ...s, urgency: 'urgent', escalated: true } : s
+          ));
         }
       } catch { /* ignore */ }
     };
@@ -297,10 +318,32 @@ export default function ProducerDashboard() {
             <div className="flex-1 overflow-y-auto p-6">
               {tab === 'ai' && (
                 isActive ? (
-                  <p className={`text-sm text-center ${T.muted}`}>Watching the room. Suggestions appear as cards above.</p>
+                  <div className="flex flex-col gap-3">
+                    {liveSuggestions.length === 0 ? (
+                      <p className={`text-sm text-center mt-4 ${T.muted}`}>Waiting for first 60s summary…</p>
+                    ) : (
+                      liveSuggestions.slice().reverse().map(s => (
+                        <div key={s.id} className={`p-3 rounded-xl border text-sm ${dark ? 'border-white/8 bg-white/3' : 'border-black/8 bg-black/3'}`}>
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className={`text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded-full border ${
+                              s.urgency === 'urgent' ? 'border-red-400/60 text-red-400' :
+                              s.urgency === 'medium' ? 'border-yellow-400/60 text-yellow-400' :
+                              dark ? 'border-white/20 text-white/40' : 'border-black/20 text-black/40'
+                            }`}>{s.urgency}</span>
+                            <span className={`text-[10px] uppercase tracking-widest ${T.muted}`}>{s.category}</span>
+                            {s.escalated && <span className="text-[10px] text-red-400">↑ escalated</span>}
+                            <span className={`text-[10px] ml-auto ${T.muted}`}>
+                              {new Date(s.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className={dark ? 'text-white/85' : 'text-black/85'}>{s.message}</p>
+                          {s.detail && <p className={`text-xs mt-0.5 ${T.muted}`}>{s.detail}</p>}
+                        </div>
+                      ))
+                    )}
+                  </div>
                 ) : (
                   <div className="flex flex-col gap-6">
-                    {/* Coach report */}
                     {coachReport && (
                       <div className="flex flex-col gap-4">
                         <p className={`text-sm leading-relaxed ${T.sub}`}>{coachReport.overallSummary}</p>
@@ -326,11 +369,10 @@ export default function ProducerDashboard() {
                         )}
                       </div>
                     )}
-                    {/* All suggestions from the session */}
                     {archivedSuggestions.length > 0 && (
                       <div>
                         <p className={`text-[11px] uppercase tracking-widest font-medium mb-3 ${T.label}`}>
-                          Live suggestions ({archivedSuggestions.length})
+                          Session suggestions ({archivedSuggestions.length})
                         </p>
                         <div className="flex flex-col gap-2">
                           {archivedSuggestions.map(s => (
@@ -354,7 +396,7 @@ export default function ProducerDashboard() {
                       </div>
                     )}
                     {!coachReport && archivedSuggestions.length === 0 && (
-                      <p className={`text-sm text-center ${T.muted}`}>No AI data yet — compile a coach report to see insights.</p>
+                      <p className={`text-sm text-center ${T.muted}`}>No AI data yet.</p>
                     )}
                   </div>
                 )
@@ -412,9 +454,6 @@ export default function ProducerDashboard() {
                     </button>
                   )}
                 </div>
-              )}
-              {tab === 'clarify' && (
-                <p className={`text-sm text-center ${T.muted}`}>Generate clarifying questions to broadcast.</p>
               )}
               {tab === 'poll' && (
                 <p className={`text-sm text-center ${T.muted}`}>Launch a poll to get instant audience feedback.</p>
