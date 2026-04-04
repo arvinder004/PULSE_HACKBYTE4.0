@@ -81,40 +81,6 @@ function assignPriority(q: Question): 'high' | 'medium' | 'low' {
   return 'low';
 }
 
-// ── Dummy seed ────────────────────────────────────────────────────────────────
-
-const DUMMY_QUESTIONS = [
-  { text: 'Can you explain the difference between concurrency and parallelism?', upvotes: 7, mergedCount: 2 },
-  { text: 'What are the trade-offs between microservices and a monolith?',        upvotes: 5, mergedCount: 1 },
-  { text: 'How does garbage collection affect real-time performance?',             upvotes: 3, mergedCount: 0 },
-  { text: 'Could you walk through a real-world example of this pattern?',         upvotes: 1, mergedCount: 1 },
-  { text: 'What tools do you recommend for distributed tracing?',                 upvotes: 0, mergedCount: 0 },
-];
-
-const seededSessions = new Set<string>();
-
-function seedDummyQuestions(sessionId: string) {
-  if (seededSessions.has(sessionId)) return;
-  seededSessions.add(sessionId);
-  const now = Date.now();
-  for (const [i, d] of DUMMY_QUESTIONS.entries()) {
-    const id = `dummy-${i}-${sessionId}`;
-    if (questions.has(id)) continue;
-    const q: Question = {
-      id,
-      sessionId,
-      text: d.text,
-      audienceId: `dummy-audience-${i}`,
-      upvotes: d.upvotes,
-      mergedCount: d.mergedCount,
-      ts: now - (DUMMY_QUESTIONS.length - i) * 60_000,
-      isPrimary: false,
-      priority: 'low', // will be computed dynamically
-    };
-    q.priority = assignPriority(q);
-    questions.set(id, q);
-  }
-}
 
 async function getPrimaryAudienceId(sessionId: string): Promise<string | null> {
   if (primaryMap.has(sessionId)) return primaryMap.get(sessionId)!;
@@ -237,9 +203,6 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const sessionId   = searchParams.get('sessionId');
   const primaryOnly = searchParams.get('primaryOnly') === '1';
-
-  // Seed dummy questions on first fetch for a session
-  if (sessionId) seedDummyQuestions(sessionId);
 
   let result = [...questions.values()]
     .filter(q => !sessionId || q.sessionId === sessionId)
