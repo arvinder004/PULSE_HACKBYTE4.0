@@ -292,3 +292,182 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
 }
 
 export default analyzeIntervention;
+
+export type GeminiCoachSegment = {
+  windowStart: number;
+  windowEnd: number;
+  timeLabel: string;
+  bullets: string[];
+  focusTags: string[];
+};
+
+export type GeminiCoachReport = {
+  segments: GeminiCoachSegment[];
+  overallSummary: string;
+  topStrengths: string[];
+  topImprovements: string[];
+  raw?: any;
+};
+
+type CoachBatch = {
+  windowStart: number;
+  windowEnd: number;
+  transcript: string;
+  summary: string;
+  improvement: string;
+  focusTags: string[];
+  signals: Record<string, number>;
+};
+
+function msToTimeLabel(sessionStartMs: number, windowStart: number, windowEnd: number): string {
+  const fmt = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  return `${fmt(windowStart - sessionStartMs)} – ${fmt(windowEnd - sessionStartMs)}`;
+}
+
+/**
+ * Compile all 60s mini-batch summaries into a final structured coaching report.
+ */
+export async function compileCoachReport({
+  sessionId,
+  speakerName,
+  topic,
+  sessionStartMs,
+  batches,
+}: {
+  sessionId: string;
+  speakerName: string;
+  topic: string;
+  sessionStartMs: number;
+  batches: CoachBatch[];
+}): Promise<GeminiCoachReport> {
+  const DEBUG = true;
+
+  // Build time-labelled batch list for the prompt
+  const batchLines = batches.map((b, i) => {
+    const label = msToTimeLabel(sessionStartMs, b.windowStart, b.windowEnd);
+    return [
+      `--- Segment ${i + 1} [${label}] ---`,
+      `Transcript: ${b.transcript.slice(0, 600)}`,
+      `Mini-summary: ${b.summary}`,
+      `Improvement note: ${b.improvement}`,
+      `Focus tags: ${b.focusTags.join(', ') || 'none'}`,
+      `Signals: ${JSON.stringify(b.signals)}`,
+    ].join('\n');
+  }).join('\n\n');
+
+  // Fallback when no API key
+  if (!process.env.GEMINI_API_KEY) {
+    if (DEBUG) console.log('[PULSE][Coach] fallback (no API key)', { sessionId, batchCount: batches.length });
+    return {
+      segments: batches.map(b => ({
+        windowStart: b.windowStart,
+        windowEnd: b.windowEnd,
+        timeLabel: msToTimeLabel(sessionStartMs, b.windowStart, b.windowEnd),
+        bullets: [b.improvement || b.summary || 'No data for this segment.'],
+        focusTags: b.focusTags,
+      })),
+      overallSummary: 'Session complete. Review each segment for improvement notes.',
+      topStrengths: ['Completed the session'],
+      topImprovements: ['Review pacing and clarity in flagged segments'],
+      raw: { heuristic: true },
+    };
+  }
+
+  const prompt = [
+    'You are an expert speaking coach. A speaker just finished a talk.',
+    'You have their session broken into 60-second segments below.',
+    'Your job: produce a structured coaching report.',
+    '',
+    'Output ONLY valid JSON matching this exact shape:',
+    '{',
+    '  "segments": [',
+    '    {',
+    '      "windowStart": <number ms>,',
+    '      "windowEnd": <number ms>,',
+    '      "timeLabel": "<string like 0:00 – 1:00>",',
+    '      "bullets": ["<actionable improvement point>", ...],  // 2-4 bullets per segment',
+    '      "focusTags": ["<tag>", ...]  // max 3',
+    '    }',
+    '  ],',
+    '  "overallSummary": "<2-3 sentence overall coaching summary>",',
+    '  "topStrengths": ["<strength>", "<strength>"],  // 2-3 items',
+    '  "topImprovements": ["<improvement>", "<improvement>"]  // 2-3 items',
+    '}',
+    '',
+    'Rules:',
+    '- Each bullet must be specific and actionable, referencing what was said or signalled.',
+    '- Do NOT repeat the same bullet across segments.',
+    '- Focus on delivery: pacing, clarity, structure, engagement. Ignore audience chatter.',
+    '- Be constructive. No moral judgments.',
+    '',
+    `Session ID: ${sessionId}`,
+    `Speaker: ${speakerName || '(unknown)'}`,
+    `Topic: ${topic || '(unknown)'}`,
+    `Total segments: ${batches.length}`,
+    '',
+    batchLines,
+  ].join('\n');
+
+  try {
+    if (DEBUG) console.log('[PULSE][Coach] calling Gemini', { sessionId, batchCount: batches.length, promptLen: prompt.length });
+
+    const model = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY!)}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.3 },
+      }),
+    });
+
+    const apiJson = await res.json().catch(() => null) as any;
+    const textResp = apiJson?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
+
+    if (DEBUG) console.log('[PULSE][Coach] Gemini raw response length', textResp.length);
+
+    const jsonMatch = textResp.match(/\{[\s\S]*\}/);
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(textResp);
+
+    const segments: GeminiCoachSegment[] = (parsed.segments || []).map((s: any) => ({
+      windowStart: Number(s.windowStart ?? 0),
+      windowEnd:   Number(s.windowEnd ?? 0),
+      timeLabel:   String(s.timeLabel ?? ''),
+      bullets:     Array.isArray(s.bullets) ? s.bullets.map(String) : [],
+      focusTags:   Array.isArray(s.focusTags) ? s.focusTags.map(String).slice(0, 3) : [],
+    }));
+
+    if (DEBUG) console.log('[PULSE][Coach] parsed segments', segments.length);
+
+    return {
+      segments,
+      overallSummary: String(parsed.overallSummary || ''),
+      topStrengths:   Array.isArray(parsed.topStrengths) ? parsed.topStrengths.map(String) : [],
+      topImprovements: Array.isArray(parsed.topImprovements) ? parsed.topImprovements.map(String) : [],
+      raw: parsed,
+    };
+  } catch (e) {
+    if (DEBUG) console.log('[PULSE][Coach] Gemini error', String(e));
+    // Graceful fallback — use mini-batch data directly
+    return {
+      segments: batches.map(b => ({
+        windowStart: b.windowStart,
+        windowEnd: b.windowEnd,
+        timeLabel: msToTimeLabel(sessionStartMs, b.windowStart, b.windowEnd),
+        bullets: [b.improvement || b.summary || 'No data.'],
+        focusTags: b.focusTags,
+      })),
+      overallSummary: 'Could not generate full report — showing raw segment notes.',
+      topStrengths: [],
+      topImprovements: [],
+      raw: { error: String(e) },
+    };
+  }
+}

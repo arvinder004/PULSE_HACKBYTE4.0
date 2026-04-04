@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { useRef, useState, useEffect } from 'react';
 
 interface DashboardNavProps {
   sessionId: string;
@@ -19,6 +20,10 @@ interface DashboardNavProps {
   captionsEnabled?: boolean;
   onToggleCaptions?: () => void;
   onEndSession?: () => void;
+  // Mic device picker
+  micDevices?: { deviceId: string; label: string }[];
+  selectedMicDeviceId?: string;
+  onSwitchMicDevice?: (deviceId: string) => void;
 }
 
 export default function DashboardNav({
@@ -37,6 +42,9 @@ export default function DashboardNav({
   captionsEnabled = true,
   onToggleCaptions,
   onEndSession,
+  micDevices = [],
+  selectedMicDeviceId = '',
+  onSwitchMicDevice,
 }: DashboardNavProps) {
   const router = useRouter();
   const DEBUG = true;
@@ -52,6 +60,22 @@ export default function DashboardNav({
       <div className="flex items-center gap-4">
         <span className="text-sm font-semibold tracking-tight">PULSE</span>
         <span className={`text-xs ${t.label}`}>{mode === 'speaker' ? 'Speaker' : 'Producer'}</span>
+
+        {/* Mic device picker — speaker only, only when devices are available */}
+        {mode === 'speaker' && micDevices.length > 0 && onSwitchMicDevice && (
+          <MicPicker
+            dark={dark}
+            devices={micDevices}
+            selectedDeviceId={selectedMicDeviceId}
+            onSelect={(id) => {
+              if (DEBUG) console.log('[PULSE][Phase4][Mic] user selected device', {
+                deviceId: id.slice(0, 8),
+                label: micDevices.find(d => d.deviceId === id)?.label,
+              });
+              onSwitchMicDevice(id);
+            }}
+          />
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -150,5 +174,67 @@ export default function DashboardNav({
         </button>
       </div>
     </nav>
+  );
+}
+
+function MicPicker({
+  dark,
+  devices,
+  selectedDeviceId,
+  onSelect,
+}: {
+  dark: boolean;
+  devices: { deviceId: string; label: string }[];
+  selectedDeviceId: string;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selected = devices.find(d => d.deviceId === selectedDeviceId) ?? devices[0];
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const base = dark
+    ? 'bg-black border-white/10 text-white/60'
+    : 'bg-white border-black/10 text-black/60';
+  const hover = dark ? 'hover:bg-white/5' : 'hover:bg-black/5';
+  const activeItem = dark ? 'bg-white/10 text-white' : 'bg-black/8 text-black';
+
+  const truncate = (s: string, n = 24) => s.length > n ? s.slice(0, n) + '…' : s;
+
+  return (
+    <div ref={ref} className="relative flex items-center gap-1">
+      <span className="text-xs opacity-40">🎙</span>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className={`flex items-center gap-1.5 px-2.5 py-0.5 text-xs border rounded-full transition-colors ${base} ${hover}`}
+      >
+        <span className="max-w-[130px] truncate">{selected ? truncate(selected.label) : 'Select mic'}</span>
+        <span className="opacity-40 text-[9px]">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className={`absolute top-full left-0 mt-1.5 z-50 min-w-[200px] rounded-xl border shadow-xl overflow-hidden ${base}`}>
+          {devices.map(d => (
+            <button
+              key={d.deviceId}
+              onClick={() => { onSelect(d.deviceId); setOpen(false); }}
+              className={`w-full text-left px-3 py-2 text-xs transition-colors ${hover} ${d.deviceId === selectedDeviceId ? activeItem : ''}`}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

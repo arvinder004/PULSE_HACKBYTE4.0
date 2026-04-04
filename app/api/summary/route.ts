@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     windowEnd,
   });
 
-  if (transcript.length < 40) {
+  if (transcript.length < 20) {
     return NextResponse.json({ error: 'Transcript too short' }, { status: 422 });
   }
 

@@ -8,6 +8,7 @@ import useSpeechTranscript from '@/lib/useSpeechTranscript';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 import { useTheme } from '@/lib/useTheme';
+import SessionReport from '@/components/SessionReport';
 
 // Room state distilled to a single ambient signal
 type RoomState = 'good' | 'check' | 'confused' | 'fast' | 'slow';
@@ -73,6 +74,10 @@ export default function SpeakerView() {
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const reactionId = useRef(0);
+  // Coach report
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachReport, setCoachReport] = useState<any | null>(null);
+  const [coachError, setCoachError] = useState<string | null>(null);
   const DEBUG = true;
 
   const countsRef = useRef(counts);
@@ -85,8 +90,10 @@ export default function SpeakerView() {
   const captionsRef = useRef<any[]>([]);
   const summaryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSummaryEndRef = useRef(0);
+  const runSummaryRef = useRef<(() => Promise<void>) | null>(null);
   // Local rolling buffer — persists across SpacetimeDB reconnects
   const [localCaptions, setLocalCaptions] = useState<{ id: string; text: string; ts: number }[]>([]);
+  const localCaptionsRef = useRef<{ id: string; text: string; ts: number }[]>([]);
 
   const transcriptLive = transcript.listening;
 
@@ -108,6 +115,10 @@ export default function SpeakerView() {
   useEffect(() => {
     captionsRef.current = spacetime.captions || [];
   }, [spacetime.captions]);
+
+  useEffect(() => {
+    localCaptionsRef.current = localCaptions;
+  }, [localCaptions]);
 
   useEffect(() => {
     // Always stop recognition on unmount.
@@ -156,23 +167,29 @@ export default function SpeakerView() {
   useEffect(() => {
     if (!sessionId || !sessionStarted || sessionEnded) return;
 
-    const runSummary = async () => {
+    const runSummary = async (flush = false) => {
       try {
         const now = Date.now();
         const windowEnd = now;
-        const windowStart = now - 60_000;
+        // On flush: cover everything since last summary; otherwise last 60s
+        const windowStart = flush
+          ? (lastSummaryEndRef.current > 0 ? lastSummaryEndRef.current : now - 3_600_000)
+          : now - 60_000;
 
-        const captions = (captionsRef.current || [])
-          .map((c: any) => ({
-            text: c.text,
-            ts: Number(c.created_at ?? 0),
-          }))
+        // Use localCaptionsRef — reliable buffer that survives SpacetimeDB reconnects
+        const captions = (localCaptionsRef.current || [])
           .filter(c => c.ts >= windowStart && c.ts <= windowEnd && c.text);
 
-        if (captions.length === 0) return;
+        if (captions.length === 0) {
+          if (DEBUG) console.log('[PULSE][Phase4][Summary] no captions in window', { flush, windowStart, windowEnd });
+          return;
+        }
 
         const newestTs = Math.max(...captions.map(c => c.ts));
-        if (newestTs <= lastSummaryEndRef.current) return;
+        if (newestTs <= lastSummaryEndRef.current) {
+          if (DEBUG) console.log('[PULSE][Phase4][Summary] no new captions since last summary');
+          return;
+        }
 
         const transcriptText = captions
           .sort((a, b) => a.ts - b.ts)
@@ -181,13 +198,18 @@ export default function SpeakerView() {
           .join(' ')
           .trim();
 
-        if (transcriptText.length < 40) return;
+        if (transcriptText.length < 20) {
+          if (DEBUG) console.log('[PULSE][Phase4][Summary] transcript too short', transcriptText.length);
+          return;
+        }
 
         lastSummaryEndRef.current = windowEnd;
 
         if (DEBUG) console.log('[PULSE][Phase4][Summary] window', {
+          flush,
           sessionId,
           chars: transcriptText.length,
+          captions: captions.length,
           windowStart,
           windowEnd,
         });
@@ -207,6 +229,9 @@ export default function SpeakerView() {
         if (DEBUG) console.log('[PULSE][Phase4][Summary] failed', String(e));
       }
     };
+
+    // Expose flush fn on ref so session-end effect can call it
+    runSummaryRef.current = () => runSummary(true);
 
     const timeoutId = setTimeout(() => {
       runSummary();
@@ -344,6 +369,47 @@ export default function SpeakerView() {
       })
       .catch(() => {})
       .finally(() => setHistoryLoading(false));
+
+    // Compile coach report in background — flush pending summary first
+    setCoachLoading(true);
+    setCoachError(null);
+    console.log('[PULSE][Coach] session ended — flushing final summary then compiling report', { sessionId });
+
+    const compileReport = async () => {
+      // Flush any captions not yet summarised
+      if (runSummaryRef.current) {
+        try {
+          console.log('[PULSE][Coach] flushing final summary segment');
+          await runSummaryRef.current();
+        } catch (e) {
+          console.log('[PULSE][Coach] flush failed', String(e));
+        }
+      }
+      // Small delay to let the summary write complete
+      await new Promise(r => setTimeout(r, 800));
+
+      try {
+        const res = await fetch('/api/coach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        });
+        const data = await res.json();
+        if (data?.report) {
+          console.log('[PULSE][Coach] report ready', { sessionId, segments: data.report.segments?.length });
+          setCoachReport(data.report);
+        } else {
+          console.log('[PULSE][Coach] no report in response', data);
+          setCoachError(data?.error || 'No report generated');
+        }
+      } catch (e) {
+        console.log('[PULSE][Coach] fetch error', String(e));
+        setCoachError('Failed to load coach report');
+      } finally {
+        setCoachLoading(false);
+      }
+    };
+    compileReport();
   }, [sessionEnded, sessionId]);
 
   const roomState = getRoomState(counts);
@@ -382,6 +448,9 @@ export default function SpeakerView() {
         confirmEnd={confirmEnd}
         micSupported={transcript.supported}
         micEnabled={micEnabled}
+        micDevices={transcript.devices}
+        selectedMicDeviceId={transcript.selectedDeviceId}
+        onSwitchMicDevice={transcript.switchDevice}
         onToggleMic={async () => {
           if (!sessionStarted) {
             if (DEBUG) console.log('[PULSE][Phase3][Mic] start session first');
@@ -502,6 +571,28 @@ export default function SpeakerView() {
             Session Ended
           </div>
         )}
+
+        {/* Coach report — loading screen then cards */}
+        {sessionEnded && coachLoading && (
+          <div className="flex flex-col items-center gap-3 mt-2">
+            <div className="w-6 h-6 rounded-full border-2 border-white/20 border-t-white/70 animate-spin" />
+            <span className={`text-xs ${subText}`}>Generating coaching report…</span>
+          </div>
+        )}
+
+        {sessionEnded && !coachLoading && coachError && (
+          <div className={`text-xs mt-2 ${subText}`}>{coachError}</div>
+        )}
+
+        {sessionEnded && !coachLoading && coachReport && (
+          <SessionReport
+            coachReport={coachReport}
+            dark={dark}
+            captionMuted={captionMuted}
+            transcriptHistory={transcriptHistory}
+            captionHistory={captionHistory}
+          />
+        )}
         <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
           <div className="flex flex-col items-center gap-1 text-center">
             <span className={`text-lg font-semibold transition-colors duration-700 ${cfg.color}`}>
@@ -567,7 +658,7 @@ export default function SpeakerView() {
                   <>
                     <div className="py-1 opacity-40 text-[10px] uppercase tracking-widest">Transcript history</div>
                     {transcriptHistory.map((seg, i) => (
-                      <div key={i} className="py-1 border-b border-white/5 last:border-b-0">
+                      <div key={i} id={`caption-ts-${seg.startTs}`} className="py-1 border-b border-white/5 last:border-b-0">
                         {seg.startTs > 0 && (
                           <span className="opacity-60 mr-2">
                             {new Date(seg.startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

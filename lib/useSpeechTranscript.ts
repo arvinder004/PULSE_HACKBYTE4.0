@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type TranscriptChunk = { text: string; ts: number };
 
+export type MicDevice = { deviceId: string; label: string };
+
 const DEEPGRAM_WS = 'wss://api.deepgram.com/v1/listen';
 
 function buildDeepgramUrl() {
@@ -22,7 +24,6 @@ function buildDeepgramUrl() {
   return `${DEEPGRAM_WS}?${params.toString()}`;
 }
 
-
 /**
  * Rolling 60s transcript buffer using Deepgram streaming STT.
  * Requires NEXT_PUBLIC_DEEPGRAM_API_KEY to be set.
@@ -33,6 +34,9 @@ export default function useSpeechTranscript() {
   const [liveText, setLiveText] = useState('');
   const [finalText, setFinalText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [devices, setDevices] = useState<MicDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+
   const chunksRef = useRef<TranscriptChunk[]>([]);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -45,7 +49,38 @@ export default function useSpeechTranscript() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const envLoggedRef = useRef(false);
   const micProbeRef = useRef(false);
+  const selectedDeviceIdRef = useRef(selectedDeviceId);
   const DEBUG = true;
+
+  // Keep ref in sync so start() always uses the latest deviceId
+  useEffect(() => {
+    selectedDeviceIdRef.current = selectedDeviceId;
+  }, [selectedDeviceId]);
+
+  // Enumerate microphones — requires at least one getUserMedia grant first
+  const refreshDevices = useCallback(async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const mics = all
+        .filter(d => d.kind === 'audioinput')
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Microphone ${i + 1}`,
+        }));
+      setDevices(mics);
+      // Auto-select first device if nothing selected yet
+      if (mics.length > 0 && !selectedDeviceIdRef.current) {
+        const def = mics.find(m => m.deviceId === 'default') ?? mics[0];
+        setSelectedDeviceId(def.deviceId);
+        selectedDeviceIdRef.current = def.deviceId;
+      }
+      if (DEBUG) console.log('[PULSE][Phase4][Mic] devices enumerated', mics.map(m => ({ id: m.deviceId.slice(0, 8), label: m.label })));
+      return mics;
+    } catch (e) {
+      if (DEBUG) console.log('[PULSE][Phase4][Mic] enumerate failed', String(e));
+      return [];
+    }
+  }, [DEBUG]);
 
   useEffect(() => {
     if (DEBUG && !envLoggedRef.current) {
@@ -72,7 +107,32 @@ export default function useSpeechTranscript() {
       return;
     }
 
+    // On mount: request mic permission once to get labelled device list, then release the stream
+    const initMicPermission = async () => {
+      try {
+        if (DEBUG) console.log('[PULSE][Phase4][Mic] requesting permission on mount to enumerate devices');
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Immediately stop — we only needed the permission grant
+        stream.getTracks().forEach(t => t.stop());
+        if (DEBUG) console.log('[PULSE][Phase4][Mic] permission granted, enumerating devices');
+        await refreshDevices();
+      } catch (e) {
+        if (DEBUG) console.log('[PULSE][Phase4][Mic] permission denied on mount', String(e));
+        // Still try to enumerate — will get deviceIds without labels
+        await refreshDevices();
+      }
+    };
+    initMicPermission();
+
+    // Listen for device changes (plug/unplug)
+    const handleDeviceChange = () => {
+      if (DEBUG) console.log('[PULSE][Phase4][Mic] devicechange event — re-enumerating');
+      refreshDevices();
+    };
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+
     return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
       try { recorderRef.current?.stop?.(); } catch {}
       recorderRef.current = null;
       try { socketRef.current?.close?.(); } catch {}
@@ -80,7 +140,7 @@ export default function useSpeechTranscript() {
       try { streamRef.current?.getTracks?.().forEach(t => t.stop()); } catch {}
       streamRef.current = null;
     };
-  }, []);
+  }, [refreshDevices]);
 
   const scheduleReconnect = useCallback((reason: string) => {
     if (!wantListeningRef.current || suspendedRef.current) return;
@@ -125,8 +185,24 @@ export default function useSpeechTranscript() {
       retryCountRef.current = 0;
       setError(null);
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const deviceId = selectedDeviceIdRef.current;
+      const audioConstraints: MediaTrackConstraints = deviceId
+        ? { deviceId: { exact: deviceId } }
+        : true as any;
+
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] requesting mic', { deviceId: deviceId || 'default' });
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       streamRef.current = stream;
+
+      // After first grant, enumerate so labels are populated
+      const mics = await refreshDevices();
+      if (mics.length > 0 && !selectedDeviceIdRef.current) {
+        // Auto-select the default device
+        const defaultMic = mics.find(m => m.deviceId === 'default') ?? mics[0];
+        setSelectedDeviceId(defaultMic.deviceId);
+        selectedDeviceIdRef.current = defaultMic.deviceId;
+      }
 
       if (!micProbeRef.current) {
         micProbeRef.current = true;
@@ -146,8 +222,7 @@ export default function useSpeechTranscript() {
         setError('missing-deepgram-key');
         return;
       }
-      // Deepgram browser auth: pass key via Sec-WebSocket-Protocol header
-      // (custom Authorization headers are blocked by browsers on WebSocket)
+
       const socket = new WebSocket(buildDeepgramUrl(), ['token', apiKey]);
       socket.binaryType = 'arraybuffer';
       socketRef.current = socket;
@@ -209,7 +284,7 @@ export default function useSpeechTranscript() {
       setError(e?.name || e?.message || 'deepgram-start-failed');
       if (DEBUG) console.log('[PULSE][Phase4][Deepgram] start failed', e?.message || e);
     }
-  }, [scheduleReconnect, handleTranscript, DEBUG]);
+  }, [scheduleReconnect, handleTranscript, refreshDevices, DEBUG]);
 
   useEffect(() => {
     startRef.current = start;
@@ -234,6 +309,43 @@ export default function useSpeechTranscript() {
     }
   }, [DEBUG]);
 
+  /**
+   * Switch to a different mic device. If currently listening, restarts the stream.
+   */
+  const switchDevice = useCallback(async (deviceId: string) => {
+    const prev = selectedDeviceIdRef.current;
+    if (prev === deviceId) return;
+
+    const wasListening = listeningRef.current;
+    const label = devices.find(d => d.deviceId === deviceId)?.label ?? deviceId.slice(0, 8);
+
+    if (DEBUG) console.log('[PULSE][Phase4][Mic] switching device', {
+      from: devices.find(d => d.deviceId === prev)?.label ?? prev.slice(0, 8),
+      to: label,
+      wasListening,
+    });
+
+    setSelectedDeviceId(deviceId);
+    selectedDeviceIdRef.current = deviceId;
+
+    if (wasListening) {
+      // Tear down current stream, restart with new device
+      try { recorderRef.current?.stop?.(); } catch {}
+      recorderRef.current = null;
+      try { socketRef.current?.close?.(); } catch {}
+      socketRef.current = null;
+      try { streamRef.current?.getTracks?.().forEach(t => t.stop()); } catch {}
+      streamRef.current = null;
+      listeningRef.current = false;
+      setListening(false);
+
+      if (DEBUG) console.log('[PULSE][Phase4][Mic] restarting with new device', label);
+      // Small delay to let tracks fully release
+      await new Promise(r => setTimeout(r, 150));
+      startRef.current?.();
+    }
+  }, [devices, DEBUG]);
+
   const getLast60s = useCallback(() => {
     const cutoff = Date.now() - 60_000;
     return chunksRef.current.filter(c => c.ts >= cutoff).map(c => c.text).join(' ');
@@ -245,8 +357,11 @@ export default function useSpeechTranscript() {
     liveText,
     finalText,
     error,
+    devices,
+    selectedDeviceId,
     start,
     stop,
+    switchDevice,
     getLast60s,
-  }), [supported, listening, liveText, finalText, error, start, stop, getLast60s]);
+  }), [supported, listening, liveText, finalText, error, devices, selectedDeviceId, start, stop, switchDevice, getLast60s]);
 }
