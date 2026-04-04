@@ -78,6 +78,9 @@ export default function SpeakerView() {
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachReport, setCoachReport] = useState<any | null>(null);
   const [coachError, setCoachError] = useState<string | null>(null);
+  // Questions panel
+  const [showQuestions, setShowQuestions] = useState(false);
+  const [speakerQuestions, setSpeakerQuestions] = useState<Array<{ id: string; text: string; upvotes: number; mergedCount: number; priority: 'high' | 'medium' | 'low' }>>([]);
   const DEBUG = true;
 
   const countsRef = useRef(counts);
@@ -402,6 +405,21 @@ export default function SpeakerView() {
     };
     compileReport();
   }, [sessionEnded, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !showQuestions) return;
+    let alive = true;
+    async function fetchQ() {
+      try {
+        const res = await fetch(`/api/questions?sessionId=${sessionId}`);
+        const json = await res.json().catch(() => []);
+        if (alive) setSpeakerQuestions(Array.isArray(json) ? json : []);
+      } catch {}
+    }
+    fetchQ();
+    const id = setInterval(fetchQ, 5_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionId, showQuestions]);
 
   const roomState = getRoomState(counts);
   const cfg       = ROOM_CONFIG[roomState];
@@ -737,6 +755,82 @@ export default function SpeakerView() {
         <span className={`text-xs font-mono ${bottomSub}`}>/audience/{sessionId}</span>
         <span className={`text-[10px] font-mono mt-0.5 ${bottomText}`}>Primary judge: /audience/{sessionId}?primary=1</span>
       </div>
+
+      {/* Questions toggle button */}
+      <button
+        onClick={() => setShowQuestions(v => !v)}
+        className={`fixed bottom-6 right-6 z-40 flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-medium shadow-lg transition-all ${
+          showQuestions
+            ? 'bg-white text-black'
+            : dark ? 'bg-white/10 text-white border border-white/20 hover:bg-white/20' : 'bg-black text-white hover:bg-black/80'
+        }`}
+      >
+        <span>✋</span>
+        <span>Questions</span>
+        {speakerQuestions.length > 0 && (
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${showQuestions ? 'bg-black/10' : 'bg-white/20'}`}>
+            {speakerQuestions.length}
+          </span>
+        )}
+      </button>
+
+      {/* Questions panel */}
+      {showQuestions && (
+        <div className={`fixed inset-y-0 right-0 z-30 w-full max-w-sm flex flex-col shadow-2xl transition-all ${dark ? 'bg-zinc-950 border-l border-white/10' : 'bg-white border-l border-black/10'}`}>
+          <div className={`flex items-center justify-between px-5 py-4 border-b ${dark ? 'border-white/10' : 'border-black/10'}`}>
+            <div>
+              <p className={`text-[11px] uppercase tracking-widest font-medium ${dark ? 'text-white/40' : 'text-black/50'}`}>Audience Questions</p>
+              <p className={`text-xs mt-0.5 ${dark ? 'text-white/30' : 'text-black/40'}`}>Sorted by priority &amp; votes</p>
+            </div>
+            <button
+              onClick={() => setShowQuestions(false)}
+              className={`text-lg transition-colors ${dark ? 'text-white/30 hover:text-white' : 'text-black/30 hover:text-black'}`}
+              aria-label="Close questions panel"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+            {speakerQuestions.length === 0 && (
+              <p className={`text-sm text-center mt-8 ${dark ? 'text-white/30' : 'text-black/40'}`}>No questions yet.</p>
+            )}
+            {speakerQuestions.map((q, i) => {
+              const PRIORITY_STYLES = {
+                high:   { bar: 'bg-red-500',    badge: 'bg-red-500/15 text-red-400',    card: dark ? 'border-red-500/30 bg-red-500/8'    : 'border-red-300 bg-red-50'    },
+                medium: { bar: 'bg-amber-400',  badge: 'bg-amber-400/15 text-amber-400', card: dark ? 'border-amber-400/30 bg-amber-400/8' : 'border-amber-200 bg-amber-50' },
+                low:    { bar: 'bg-blue-400',   badge: 'bg-blue-400/15 text-blue-400',  card: dark ? 'border-blue-400/20 bg-blue-400/5'  : 'border-blue-200 bg-blue-50'  },
+              };
+              const s = PRIORITY_STYLES[q.priority];
+              const totalVotes = q.upvotes + q.mergedCount;
+              return (
+                <div key={q.id} className={`relative rounded-2xl border px-4 py-3 text-sm overflow-hidden ${s.card}`}>
+                  {/* Priority color bar */}
+                  <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl ${s.bar}`} />
+                  <div className="flex items-start gap-3 pl-2">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className={`text-[10px] uppercase tracking-widest font-semibold px-1.5 py-0.5 rounded-full ${s.badge}`}>
+                          {q.priority}
+                        </span>
+                        <span className={`text-[10px] ${dark ? 'text-white/30' : 'text-black/40'}`}>Q{i + 1}</span>
+                      </div>
+                      <p className={`leading-snug ${dark ? 'text-white/85' : 'text-black/90'}`}>{q.text}</p>
+                    </div>
+                    <div className={`flex flex-col items-center gap-0.5 shrink-0 ${dark ? 'text-white/40' : 'text-black/40'}`}>
+                      <span className="text-base leading-none">▲</span>
+                      <span className="text-xs font-semibold tabular-nums">{totalVotes}</span>
+                    </div>
+                  </div>
+                  {q.mergedCount > 0 && (
+                    <p className={`text-[10px] mt-1.5 pl-2 ${dark ? 'text-white/25' : 'text-black/35'}`}>+{q.mergedCount} similar question{q.mergedCount > 1 ? 's' : ''}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
