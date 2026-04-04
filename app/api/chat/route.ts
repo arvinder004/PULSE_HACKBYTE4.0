@@ -11,7 +11,7 @@ function isValidSessionId(id: string) {
 }
 
 async function askGemini(question: string, transcript: string): Promise<string> {
-  const model = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+  const model = process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview';
   const apiKey = process.env.GEMINI_API_KEY;
 
   const systemPrompt = [
