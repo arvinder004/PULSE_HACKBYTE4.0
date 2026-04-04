@@ -3,6 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SPACETIMEDB_URL: ${NEXT_PUBLIC_SPACETIMEDB_URL:-wss://maincloud.spacetimedb.com}
+        NEXT_PUBLIC_SPACETIMEDB_MODULE: ${NEXT_PUBLIC_SPACETIMEDB_MODULE:-pulse}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://pulse.venoms.app}
+        NEXT_PUBLIC_DEEPGRAM_MODEL: ${NEXT_PUBLIC_DEEPGRAM_MODEL:-nova-2}
+        NEXT_PUBLIC_DEEPGRAM_LANGUAGE: ${NEXT_PUBLIC_DEEPGRAM_LANGUAGE:-en-US}
+        NEXT_PUBLIC_DEEPGRAM_API_KEY: ${NEXT_PUBLIC_DEEPGRAM_API_KEY}
     ports:
       - "3001:3001"
     env_file:

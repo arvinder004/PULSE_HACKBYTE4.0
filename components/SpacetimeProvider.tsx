@@ -6,9 +6,11 @@ import { useMemo } from 'react';
 
 export default function SpacetimeProvider({ children }: { children: React.ReactNode }) {
   const connectionBuilder = useMemo(() => {
+    const uri = process.env.NEXT_PUBLIC_SPACETIMEDB_URL || 'wss://maincloud.spacetimedb.com';
+    const db  = process.env.NEXT_PUBLIC_SPACETIMEDB_MODULE || 'pulse';
     return DbConnection.builder()
-      .withUri(process.env.NEXT_PUBLIC_SPACETIMEDB_URL ?? 'wss://maincloud.spacetimedb.com')
-      .withDatabaseName(process.env.NEXT_PUBLIC_SPACETIMEDB_MODULE ?? 'pulse')
+      .withUri(uri)
+      .withDatabaseName(db)
       .withLightMode(true)
       .onConnectError((_ctx: unknown, err: unknown) => {
         console.error('[SpacetimeDB] connection error', err);
