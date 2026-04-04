@@ -88,7 +88,7 @@ export default function SpeakerView() {
   const audioRecorder = useAudioRecorder({
     sessionId,
     enabled: sessionStarted && micEnabled,
-    chunkMs: 30_000,
+    chunkMs: 60_000,
     onUploaded: (id) => {
       if (DEBUG) console.log('[PULSE][Phase3][Audio] stored chunk', id);
     },
