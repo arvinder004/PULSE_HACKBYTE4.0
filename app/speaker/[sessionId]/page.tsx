@@ -1,5 +1,8 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
+import nextDynamic from 'next/dynamic';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
@@ -570,8 +573,7 @@ export default function SpeakerView() {
 
   if (!mounted) return null;
 
-  const bg = dark ? 'bg-black text-white' : 'bg-white text-black';
-  const subText = dark ? 'text-white/30' : 'text-black/70';
+  const bg = dark ? 'bg-black text-white' : 'bg-white text-black';  const subText = dark ? 'text-white/30' : 'text-black/70';
   const whisper = dark ? 'bg-white/5 border-white/10 text-white/70' : 'bg-black/5 border-black/10 text-black/80';
   const bottomText = dark ? 'text-white/20' : 'text-black/50';
   const bottomSub = dark ? 'text-white/30' : 'text-black/60';
@@ -1017,8 +1019,7 @@ export default function SpeakerView() {
 
 // ── AudienceQR ────────────────────────────────────────────────────────────────
 // Lazy-loaded so the QR canvas only renders client-side
-import dynamic from 'next/dynamic';
-const QRCode = dynamic(() => import('react-qrcode-logo').then(m => m.QRCode), { ssr: false });
+const QRCode = nextDynamic(() => import('react-qrcode-logo').then(m => m.QRCode), { ssr: false });
 
 function AudienceQR({ sessionId, dark }: { sessionId: string; dark: boolean }) {
   const [origin, setOrigin] = useState('');
