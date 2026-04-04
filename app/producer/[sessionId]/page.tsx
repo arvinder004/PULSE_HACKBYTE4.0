@@ -96,7 +96,7 @@ export default function ProducerDashboard() {
   const [audienceCount, setAudienceCount] = useState(0);
   const [audioFiles, setAudioFiles] = useState<Array<{ id: string; filename: string; ts?: string | null }>>([]);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
-  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; upvotes: number; ts: number; isPrimary: boolean }>>([]);
+  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; upvotes: number; mergedCount: number; ts: number; isPrimary: boolean }>>([]);
   const reactionId = useRef(0);
   const DEBUG = true;
 
@@ -307,13 +307,18 @@ export default function ProducerDashboard() {
                     <div key={q.id} className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/90'}`}>
                       <div className={`flex flex-col items-center gap-0.5 shrink-0 min-w-[2rem] ${dark ? 'text-white/50' : 'text-black/50'}`}>
                         <span className="text-base leading-none">▲</span>
-                        <span className="text-sm font-semibold tabular-nums">{q.upvotes}</span>
+                        <span className="text-sm font-semibold tabular-nums">{q.upvotes + (q.mergedCount ?? 0)}</span>
                       </div>
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <span className={`text-[10px] uppercase tracking-widest ${T.muted}`}>Q{i + 1}</span>
                           {q.isPrimary && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 font-medium uppercase tracking-widest">Primary</span>
+                          )}
+                          {(q.mergedCount ?? 0) > 0 && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${dark ? 'bg-white/10 text-white/40' : 'bg-black/8 text-black/50'}`}>
+                              +{q.mergedCount} similar
+                            </span>
                           )}
                         </div>
                         {q.text}

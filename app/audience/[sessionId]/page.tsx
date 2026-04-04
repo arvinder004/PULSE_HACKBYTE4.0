@@ -47,7 +47,7 @@ export default function AudiencePage() {
   const [qFeedback,      setQFeedback]      = useState<string | null>(null);
   const [qCooldownUntil, setQCooldownUntil] = useState(0);
   const [qCooldownLeft,  setQCooldownLeft]  = useState(0);
-  const [allQuestions,   setAllQuestions]   = useState<Array<{ id: string; text: string; upvotes: number; audienceId: string; ts: number }>>([]);
+  const [allQuestions,   setAllQuestions]   = useState<Array<{ id: string; text: string; upvotes: number; mergedCount: number; audienceId: string; ts: number }>>([]);
   const [upvotedIds,     setUpvotedIds]     = useState<Set<string>>(new Set());
 
   // chat
@@ -241,9 +241,14 @@ export default function AudiencePage() {
         body: JSON.stringify({ sessionId, text, audienceId: audienceId.current }),
       });
       if (res.ok) {
+        const data = await res.json().catch(() => ({}));
         setQuestion('');
         setQCooldownUntil(Date.now() + 30_000);
-        setQFeedback('Question submitted!');
+        if (data.merged) {
+          setQFeedback(`Similar question already exists — your vote was added to: "${data.canonicalText}"`);
+        } else {
+          setQFeedback('Question submitted!');
+        }
       } else {
         const d = await res.json().catch(() => ({}));
         setQFeedback(d.error ?? 'Failed to submit');
@@ -252,7 +257,7 @@ export default function AudiencePage() {
       setQFeedback('Failed to submit');
     } finally {
       setQSending(false);
-      setTimeout(() => setQFeedback(null), 3000);
+      setTimeout(() => setQFeedback(null), 5000);
     }
   }
 
@@ -494,7 +499,7 @@ export default function AudiencePage() {
                         } disabled:cursor-not-allowed`}
                       >
                         <span className="text-base leading-none">▲</span>
-                        <span className="text-[11px] font-medium tabular-nums">{q.upvotes}</span>
+                        <span className="text-[11px] font-medium tabular-nums">{q.upvotes + (q.mergedCount ?? 0)}</span>
                       </button>
                     </div>
                   );

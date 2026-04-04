@@ -10,6 +10,7 @@ type Question = {
   upvotes: number;
   ts: number;
   isPrimary: boolean;
+  mergedCount: number; // how many duplicates were folded in
 };
 
 const g = globalThis as typeof globalThis & {
@@ -22,6 +23,50 @@ if (!g.__pulse_primary)   g.__pulse_primary   = new Map();
 const questions  = g.__pulse_questions;
 const primaryMap = g.__pulse_primary;
 const cooldowns  = new Map<string, number>();
+
+// ── Similarity helpers ────────────────────────────────────────────────────────
+
+function tokenize(text: string): Map<string, number> {
+  const STOP = new Set(['a','an','the','is','are','was','were','be','been','being',
+    'have','has','had','do','does','did','will','would','could','should','may',
+    'might','shall','can','need','dare','ought','used','to','of','in','on','at',
+    'by','for','with','about','against','between','into','through','during',
+    'before','after','above','below','from','up','down','out','off','over',
+    'under','again','further','then','once','and','but','or','nor','so','yet',
+    'both','either','neither','not','only','own','same','than','too','very',
+    'just','because','as','until','while','i','you','he','she','it','we','they',
+    'what','which','who','this','that','these','those','how','why','when','where']);
+
+  const freq = new Map<string, number>();
+  for (const w of text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)) {
+    if (w.length > 1 && !STOP.has(w)) freq.set(w, (freq.get(w) ?? 0) + 1);
+  }
+  return freq;
+}
+
+function cosineSimilarity(a: Map<string, number>, b: Map<string, number>): number {
+  let dot = 0, magA = 0, magB = 0;
+  for (const [w, v] of a) { magA += v * v; if (b.has(w)) dot += v * b.get(w)!; }
+  for (const [, v] of b) magB += v * v;
+  if (magA === 0 || magB === 0) return 0;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+const SIMILARITY_THRESHOLD = 0.55;
+
+/** Returns the most similar existing question for a session, or null. */
+function findSimilar(sessionId: string, text: string): Question | null {
+  const tokens = tokenize(text);
+  let best: Question | null = null;
+  let bestScore = SIMILARITY_THRESHOLD;
+
+  for (const q of questions.values()) {
+    if (q.sessionId !== sessionId) continue;
+    const score = cosineSimilarity(tokens, tokenize(q.text));
+    if (score > bestScore) { bestScore = score; best = q; }
+  }
+  return best;
+}
 
 async function getPrimaryAudienceId(sessionId: string): Promise<string | null> {
   if (primaryMap.has(sessionId)) return primaryMap.get(sessionId)!;
@@ -55,11 +100,30 @@ export async function POST(req: NextRequest) {
   const primaryId = await getPrimaryAudienceId(sessionId);
   const isPrimary = !primaryId || audienceId === primaryId;
 
+  // ── Duplicate / similarity check ─────────────────────────────────────────
+  const similar = findSimilar(sessionId, text.trim());
+  if (similar) {
+    // Don't let the same person upvote via duplicate submission
+    if (similar.audienceId !== audienceId) {
+      similar.upvotes += 1;
+      similar.mergedCount += 1;
+      questions.set(similar.id, similar);
+    }
+    cooldowns.set(cooldownKey, Date.now());
+    return NextResponse.json({
+      ok: true,
+      id: similar.id,
+      isPrimary: similar.isPrimary,
+      merged: true,
+      canonicalText: similar.text,
+    });
+  }
+
   const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  questions.set(id, { id, sessionId, text: text.trim(), audienceId, upvotes: 0, ts: Date.now(), isPrimary });
+  questions.set(id, { id, sessionId, text: text.trim(), audienceId, upvotes: 0, ts: Date.now(), isPrimary, mergedCount: 0 });
   cooldowns.set(cooldownKey, Date.now());
 
-  return NextResponse.json({ ok: true, id, isPrimary });
+  return NextResponse.json({ ok: true, id, isPrimary, merged: false });
 }
 
 export async function GET(req: NextRequest) {
@@ -76,7 +140,7 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json(
-    result.sort((a, b) => b.upvotes - a.upvotes || a.ts - b.ts)
+    result.sort((a, b) => (b.upvotes + b.mergedCount) - (a.upvotes + a.mergedCount) || a.ts - b.ts)
   );
 }
 
