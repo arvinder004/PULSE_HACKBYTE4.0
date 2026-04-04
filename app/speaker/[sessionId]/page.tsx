@@ -86,7 +86,7 @@ export default function SpeakerView() {
   const audioRecorder = useAudioRecorder({
     sessionId,
     enabled: sessionStarted && micEnabled,
-    chunkMs: 30_000,
+    chunkMs: 60_000,
     onUploaded: (id) => {
       setTranscriptLive(true);
       if (DEBUG) console.log('[PULSE][Phase3][Audio] stored chunk', id);
@@ -163,6 +163,31 @@ export default function SpeakerView() {
 
   // SSE — live signal counts + floating reactions
   useEffect(() => {
+<<<<<<< HEAD
+=======
+    if (!sessionId || !sessionStarted) return;
+    const interval = setInterval(async () => {
+      const text = transcript.getLast60s().trim();
+      if (!text || text === lastFlushedTextRef.current) return;
+      lastFlushedTextRef.current = text;
+      try {
+        await fetch('/api/transcript', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, text, ts: Date.now() }),
+        });
+        setTranscriptLive(true);
+        if (DEBUG) console.log('[PULSE][R1][Transcript] flushed', text.length, 'chars');
+      } catch (e) {
+        if (DEBUG) console.log('[PULSE][R1][Transcript] flush failed', String(e));
+      }
+    }, 20_000);
+    return () => clearInterval(interval);
+  }, [sessionId, sessionStarted, transcript]);
+
+  // SSE — live signal counts + floating reactions
+  useEffect(() => {
+>>>>>>> f4137dc47da7c94289b61d9ac26d3fb460858d16
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onmessage = (e) => {
