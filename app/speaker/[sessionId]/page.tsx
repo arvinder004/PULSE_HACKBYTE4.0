@@ -352,41 +352,35 @@ export default function SpeakerView() {
   useEffect(() => {
     if (!sessionEnded || !sessionId) return;
     setCaptionsExpanded(true);
-    setHistoryLoading(true);
-    fetch(`/api/transcript?sessionId=${sessionId}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        if (data.chunks?.length) {
-          setTranscriptHistory(
-            data.chunks
-              .filter((c: any) => c.text || c.preview)
-              .map((c: any) => ({ text: c.text || c.preview, startTs: c.startTs }))
-          );
-        } else if (data.fullText) {
-          setTranscriptHistory([{ text: data.fullText, startTs: 0 }]);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setHistoryLoading(false));
 
-    // Compile coach report in background — flush pending summary first
+    // Compile coach report — fetch transcript FIRST (before coach deletes SegmentSummary)
     setCoachLoading(true);
     setCoachError(null);
-    console.log('[PULSE][Coach] session ended — flushing final summary then compiling report', { sessionId });
 
     const compileReport = async () => {
       // Flush any captions not yet summarised
       if (runSummaryRef.current) {
-        try {
-          console.log('[PULSE][Coach] flushing final summary segment');
-          await runSummaryRef.current();
-        } catch (e) {
-          console.log('[PULSE][Coach] flush failed', String(e));
-        }
+        try { await runSummaryRef.current(); } catch {}
       }
-      // Small delay to let the summary write complete
       await new Promise(r => setTimeout(r, 800));
+
+      // Fetch transcript while SegmentSummary still exists (before /api/coach deletes them)
+      setHistoryLoading(true);
+      try {
+        const res = await fetch(`/api/transcript?sessionId=${sessionId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.chunks?.length) {
+            setTranscriptHistory(
+              data.chunks
+                .filter((c: any) => c.text || c.preview)
+                .map((c: any) => ({ text: c.text || c.preview, startTs: c.startTs }))
+            );
+          } else if (data.fullText) {
+            setTranscriptHistory([{ text: data.fullText, startTs: 0 }]);
+          }
+        }
+      } catch {} finally { setHistoryLoading(false); }
 
       try {
         const res = await fetch('/api/coach', {
@@ -396,14 +390,11 @@ export default function SpeakerView() {
         });
         const data = await res.json();
         if (data?.report) {
-          console.log('[PULSE][Coach] report ready', { sessionId, segments: data.report.segments?.length });
           setCoachReport(data.report);
         } else {
-          console.log('[PULSE][Coach] no report in response', data);
           setCoachError(data?.error || 'No report generated');
         }
-      } catch (e) {
-        console.log('[PULSE][Coach] fetch error', String(e));
+      } catch {
         setCoachError('Failed to load coach report');
       } finally {
         setCoachLoading(false);
@@ -589,8 +580,6 @@ export default function SpeakerView() {
             coachReport={coachReport}
             dark={dark}
             captionMuted={captionMuted}
-            transcriptHistory={transcriptHistory}
-            captionHistory={captionHistory}
           />
         )}
         <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
@@ -606,7 +595,7 @@ export default function SpeakerView() {
           <div className={`mt-6 w-full max-w-xl border rounded-2xl px-4 py-3 ${captionPanel}`}>
             <div className="flex items-center justify-between gap-3">
               <span className={`text-[11px] uppercase tracking-widest font-medium ${captionMuted}`}>
-                Live captions
+                {sessionEnded ? 'Transcript' : 'Live captions'}
               </span>
               <button
                 onClick={async () => {
@@ -618,7 +607,6 @@ export default function SpeakerView() {
                       const res = await fetch(`/api/transcript?sessionId=${sessionId}`);
                       if (res.ok) {
                         const data = await res.json();
-                        // Use per-chunk data if available, else fall back to full text
                         if (data.chunks?.length) {
                           setTranscriptHistory(
                             data.chunks
@@ -638,21 +626,28 @@ export default function SpeakerView() {
                 {captionsExpanded ? 'Collapse' : 'Expand'}
               </button>
             </div>
-            <div className="mt-2 text-sm">
-              {transcript.liveText || 'Listening…'}
-            </div>
-            {transcript.error && (
-              <div className="mt-2 text-[11px] text-red-400">
-                Transcription error: {transcript.error}. Toggle Mic to retry.
-              </div>
+
+            {/* Only show live mic text when session is active */}
+            {!sessionEnded && (
+              <>
+                <div className="mt-2 text-sm">
+                  {transcript.liveText || 'Listening…'}
+                </div>
+                {transcript.error && (
+                  <div className="mt-2 text-[11px] text-red-400">
+                    Transcription error: {transcript.error}. Toggle Mic to retry.
+                  </div>
+                )}
+              </>
             )}
+
             {captionsExpanded && (
               <div className={`mt-3 max-h-44 overflow-y-auto text-xs ${captionMuted}`}>
                 {historyLoading && (
                   <div className="py-2 opacity-60">Loading…</div>
                 )}
                 {!historyLoading && transcriptHistory.length === 0 && captionHistory.length === 0 && (
-                  <div className="py-2">No captions yet.</div>
+                  <div className="py-2">{sessionEnded ? 'No transcript available.' : 'No captions yet.'}</div>
                 )}
                 {!historyLoading && transcriptHistory.length > 0 && (
                   <>
@@ -669,7 +664,8 @@ export default function SpeakerView() {
                     ))}
                   </>
                 )}
-                {!historyLoading && captionHistory.length > 0 && (
+                {/* Only show live caption history during active session */}
+                {!sessionEnded && !historyLoading && captionHistory.length > 0 && (
                   <>
                     <div className="py-1 opacity-40 text-[10px] uppercase tracking-widest mt-1">Live captions</div>
                     {captionHistory.map((c: any) => {
