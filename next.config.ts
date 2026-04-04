@@ -7,6 +7,7 @@ const ALLOWED_ORIGINS = [
 ].filter(Boolean) as string[];
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
   devIndicators: false,
   allowedDevOrigins: ['pulse.venoms.app'],
   experimental: {},
