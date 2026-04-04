@@ -163,31 +163,6 @@ export default function SpeakerView() {
 
   // SSE — live signal counts + floating reactions
   useEffect(() => {
-<<<<<<< HEAD
-=======
-    if (!sessionId || !sessionStarted) return;
-    const interval = setInterval(async () => {
-      const text = transcript.getLast60s().trim();
-      if (!text || text === lastFlushedTextRef.current) return;
-      lastFlushedTextRef.current = text;
-      try {
-        await fetch('/api/transcript', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, text, ts: Date.now() }),
-        });
-        setTranscriptLive(true);
-        if (DEBUG) console.log('[PULSE][R1][Transcript] flushed', text.length, 'chars');
-      } catch (e) {
-        if (DEBUG) console.log('[PULSE][R1][Transcript] flush failed', String(e));
-      }
-    }, 20_000);
-    return () => clearInterval(interval);
-  }, [sessionId, sessionStarted, transcript]);
-
-  // SSE — live signal counts + floating reactions
-  useEffect(() => {
->>>>>>> f4137dc47da7c94289b61d9ac26d3fb460858d16
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onmessage = (e) => {
@@ -428,6 +403,38 @@ export default function SpeakerView() {
         </div>
         <p className={`text-sm ${subText}`}>{cfg.sub}</p>
 
+        {/* Signal cards — only shown when count > 0, colored by intensity */}
+        {total > 0 && (
+          <div className="flex flex-wrap justify-center gap-2 max-w-xs">
+            {([
+              { key: 'confused',  emoji: '😕', label: 'Confused',   danger: true  },
+              { key: 'slow_down', emoji: '🐢', label: 'Too fast',   danger: true  },
+              { key: 'question',  emoji: '✋', label: 'Question',   danger: false },
+              { key: 'clear',     emoji: '✅', label: 'Clear',      danger: false },
+              { key: 'excited',   emoji: '🔥', label: 'Excited',    danger: false },
+            ] as const).map(({ key, emoji, label, danger }) => {
+              const count = counts[key] ?? 0;
+              if (count === 0) return null;
+              const pct = total > 0 ? count / total : 0;
+              // Color intensity based on proportion
+              const intensity = danger
+                ? pct >= 0.5 ? 'bg-red-500/80 text-white ring-red-400/40'
+                  : pct >= 0.25 ? 'bg-orange-400/70 text-white ring-orange-400/30'
+                  : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10'
+                : pct >= 0.5 ? 'bg-emerald-500/70 text-white ring-emerald-400/30'
+                  : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10';
+              return (
+                <div key={key} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ring-1 text-xs font-medium transition-all duration-500 ${intensity}`}>
+                  <span>{emoji}</span>
+                  <span>{count}</span>
+                  <span className="opacity-70">{label}</span>
+                  <span className="opacity-50 text-[10px]">{Math.round(pct * 100)}%</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* AI whisper — appears only when intervention fires */}
         {aiMsg && (
           <div className={`mt-4 max-w-xs text-center px-5 py-3 rounded-xl border text-sm animate-fade-in ${whisper}`}>
@@ -458,6 +465,7 @@ export default function SpeakerView() {
       <div className="flex flex-col items-center gap-1 pb-6">
         <span className={`text-[11px] uppercase tracking-widest ${bottomText}`}>Audience</span>
         <span className={`text-xs font-mono ${bottomSub}`}>/audience/{sessionId}</span>
+        <span className={`text-[10px] font-mono mt-0.5 ${bottomText}`}>Primary judge: /audience/{sessionId}?primary=1</span>
       </div>
     </div>
   );

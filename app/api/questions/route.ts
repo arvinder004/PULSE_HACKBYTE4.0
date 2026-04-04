@@ -1,13 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { connectDB } from '@/lib/db';
+import Session from '@/lib/models/Session';
 
-type Question = { id: string; sessionId: string; text: string; audienceId: string; upvotes: number; ts: number };
+type Question = {
+  id: string;
+  sessionId: string;
+  text: string;
+  audienceId: string;
+  upvotes: number;
+  ts: number;
+  isPrimary: boolean;
+};
 
-const g = globalThis as typeof globalThis & { __pulse_questions?: Map<string, Question> };
+const g = globalThis as typeof globalThis & {
+  __pulse_questions?: Map<string, Question>;
+  __pulse_primary?: Map<string, string>;
+};
 if (!g.__pulse_questions) g.__pulse_questions = new Map();
-const questions = g.__pulse_questions;
+if (!g.__pulse_primary)   g.__pulse_primary   = new Map();
 
-// 30s per-user cooldown
-const cooldowns = new Map<string, number>();
+const questions  = g.__pulse_questions;
+const primaryMap = g.__pulse_primary;
+const cooldowns  = new Map<string, number>();
+
+async function getPrimaryAudienceId(sessionId: string): Promise<string | null> {
+  if (primaryMap.has(sessionId)) return primaryMap.get(sessionId)!;
+  try {
+    await connectDB();
+    const session = await Session.findOne({ sessionId }).lean() as any;
+    const id = session?.primaryAudienceId ?? null;
+    if (id) primaryMap.set(sessionId, id);
+    return id;
+  } catch { return null; }
+}
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
@@ -27,18 +52,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Please wait before submitting another question' }, { status: 429 });
   }
 
+  const primaryId = await getPrimaryAudienceId(sessionId);
+  const isPrimary = !primaryId || audienceId === primaryId;
+
   const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  questions.set(id, { id, sessionId, text: text.trim(), audienceId, upvotes: 0, ts: Date.now() });
+  questions.set(id, { id, sessionId, text: text.trim(), audienceId, upvotes: 0, ts: Date.now(), isPrimary });
   cooldowns.set(cooldownKey, Date.now());
 
-  return NextResponse.json({ ok: true, id });
+  return NextResponse.json({ ok: true, id, isPrimary });
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const sessionId = searchParams.get('sessionId');
-  const result = [...questions.values()]
-    .filter(q => !sessionId || q.sessionId === sessionId)
-    .sort((a, b) => b.upvotes - a.upvotes || a.ts - b.ts);
-  return NextResponse.json(result);
+  const sessionId   = searchParams.get('sessionId');
+  // ?primaryOnly=1 returns only the primary user's questions
+  const primaryOnly = searchParams.get('primaryOnly') === '1';
+
+  let result = [...questions.values()]
+    .filter(q => !sessionId || q.sessionId === sessionId);
+
+  if (primaryOnly) {
+    result = result.filter(q => q.isPrimary);
+  }
+
+  return NextResponse.json(
+    result.sort((a, b) => b.upvotes - a.upvotes || a.ts - b.ts)
+  );
 }

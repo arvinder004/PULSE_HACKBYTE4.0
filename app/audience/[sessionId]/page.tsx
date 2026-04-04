@@ -58,6 +58,7 @@ export default function AudiencePage() {
 
   const audienceId  = useRef('');
   const fpRef       = useRef('');
+  const [isPrimary, setIsPrimary] = useState(false);
 
   // ── Init stable IDs ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -68,7 +69,22 @@ export default function AudiencePage() {
     }
     audienceId.current = id;
     getFingerprint().then(fp => { fpRef.current = fp; });
-  }, []);
+
+    // If ?primary=1 in URL, register this device as the primary judge
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('primary') === '1' && sessionId) {
+      fetch(`/api/session/primary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, audienceId: id }),
+      }).then(r => r.ok && setIsPrimary(true));
+    } else if (sessionId) {
+      // Check if this device is already the primary
+      fetch(`/api/session/primary?sessionId=${sessionId}`)
+        .then(r => r.json())
+        .then(d => { if (d.primaryAudienceId === id) setIsPrimary(true); });
+    }
+  }, [sessionId]);
 
   // ── Load session ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -274,6 +290,11 @@ export default function AudiencePage() {
           <p className={`text-xs uppercase tracking-widest ${T.headerLabel}`}>Audience</p>
           <h1 className={`text-lg font-semibold mt-0.5 leading-tight ${T.headerTitle}`}>{session.topic}</h1>
           <p className={`text-sm ${T.headerSub}`}>with {session.speakerName}</p>
+          {isPrimary && (
+            <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 text-[10px] font-medium uppercase tracking-widest">
+              ★ Primary judge
+            </span>
+          )}
         </div>
         <button
           onClick={() => setDark(v => !v)}

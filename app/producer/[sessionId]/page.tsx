@@ -95,6 +95,7 @@ export default function ProducerDashboard() {
   const [audienceCount, setAudienceCount] = useState(0);
   const [audioFiles, setAudioFiles] = useState<Array<{ id: string; filename: string; ts?: string | null }>>([]);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
+  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; ts: number }>>([]);
   const reactionId = useRef(0);
   const DEBUG = true;
 
@@ -151,6 +152,22 @@ export default function ProducerDashboard() {
     }
     fetchAudio();
     const id = setInterval(fetchAudio, 20_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionId]);
+
+  // Poll primary questions every 5s
+  useEffect(() => {
+    if (!sessionId) return;
+    let alive = true;
+    async function fetchQuestions() {
+      try {
+        const res = await fetch(`/api/questions?sessionId=${sessionId}&primaryOnly=1`);
+        const json = await res.json().catch(() => []);
+        if (alive) setPrimaryQuestions(Array.isArray(json) ? json : []);
+      } catch {}
+    }
+    fetchQuestions();
+    const id = setInterval(fetchQuestions, 5_000);
     return () => { alive = false; clearInterval(id); };
   }, [sessionId]);
 
@@ -277,13 +294,28 @@ export default function ProducerDashboard() {
                 </button>
               ))}
             </div>
-            <div className="flex-1 flex items-center justify-center p-6">
-              <p className={`text-sm text-center max-w-xs ${T.muted}`}>
-                {tab === 'ai'        && 'Watching the room. Will intervene when needed.'}
-                {tab === 'questions' && 'No questions yet.'}
-                {tab === 'clarify'   && 'Generate clarifying questions to broadcast.'}
-                {tab === 'poll'      && 'Launch a poll to get instant audience feedback.'}
-              </p>
+            <div className="flex-1 overflow-y-auto p-6">
+              {tab === 'ai' && (
+                <p className={`text-sm text-center ${T.muted}`}>Watching the room. Will intervene when needed.</p>
+              )}
+              {tab === 'questions' && (
+                <div className="flex flex-col gap-3">
+                  {primaryQuestions.length === 0 ? (
+                    <p className={`text-sm text-center ${T.muted}`}>No questions from the primary judge yet.</p>
+                  ) : primaryQuestions.map((q, i) => (
+                    <div key={q.id} className={`p-4 rounded-xl border text-sm ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/80'}`}>
+                      <span className={`text-[10px] uppercase tracking-widest mr-2 ${T.muted}`}>Q{i + 1}</span>
+                      {q.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {tab === 'clarify' && (
+                <p className={`text-sm text-center ${T.muted}`}>Generate clarifying questions to broadcast.</p>
+              )}
+              {tab === 'poll' && (
+                <p className={`text-sm text-center ${T.muted}`}>Launch a poll to get instant audience feedback.</p>
+              )}
             </div>
           </div>
 
