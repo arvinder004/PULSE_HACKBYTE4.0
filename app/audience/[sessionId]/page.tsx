@@ -61,6 +61,11 @@ export default function AudiencePage() {
   const fpRef       = useRef('');
   const [isPrimary, setIsPrimary] = useState(false);
 
+  // captions
+  const [captionHistory,     setCaptionHistory]     = useState<{ text: string; startTs: number }[]>([]);
+  const [captionLive,        setCaptionLive]        = useState('');
+  const captionBottomRef = useRef<HTMLDivElement>(null);
+
   // ── Init stable IDs ──────────────────────────────────────────────────────
   useEffect(() => {
     let id = localStorage.getItem('pulse_audience_id');
@@ -124,6 +129,33 @@ export default function AudiencePage() {
       } catch { /* ignore */ }
     };
     return () => es.close();
+  }, [sessionId]);
+
+  // ── Poll captions from transcript API every 3s ───────────────────────────
+  useEffect(() => {
+    if (!sessionId) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/transcript?sessionId=${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.chunks?.length) {
+          setCaptionHistory(
+            data.chunks
+              .filter((c: any) => c.text || c.preview)
+              .map((c: any) => ({ text: c.text || c.preview, startTs: c.startTs }))
+          );
+          const last = data.chunks[data.chunks.length - 1];
+          setCaptionLive(last?.text || last?.preview || '');
+        } else if (data.fullText) {
+          setCaptionHistory([{ text: data.fullText, startTs: 0 }]);
+          setCaptionLive(data.fullText);
+        }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 3_000);
+    return () => clearInterval(id);
   }, [sessionId]);
 
   // ── Send signal — HTTP + SpacetimeDB reducer ─────────────────────────────
@@ -244,6 +276,11 @@ export default function AudiencePage() {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
+  // Auto-scroll captions to bottom
+  useEffect(() => {
+    captionBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [captionHistory]);
+
   // ── Error / loading states ───────────────────────────────────────────────
   if (notFound) return (
     <div className={`flex items-center justify-center min-h-screen px-4 ${dark ? 'bg-black' : 'bg-zinc-50'}`}>
@@ -279,6 +316,9 @@ export default function AudiencePage() {
     chatBubbleBot:  dark ? 'bg-white/10 text-white' : 'bg-white text-zinc-900 border border-zinc-200',
     chatStale:      dark ? 'text-yellow-400/60' : 'text-yellow-700',
     chatInput:   dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30' : 'border-zinc-300 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500',
+    captionPanel: dark ? 'bg-white/5 border-white/10 text-white/80'  : 'bg-black/5 border-black/10 text-black/70',
+    captionMuted: dark ? 'text-white/40'                              : 'text-black/40',
+    captionRow:   dark ? 'border-white/5'                             : 'border-black/5',
   };
 
   return (
@@ -305,6 +345,32 @@ export default function AudiencePage() {
           {dark ? '☀️' : '🌙'}
         </button>
       </header>
+
+      {/* Live captions — always visible */}
+      <div className={`px-4 py-3 border-b ${T.captionPanel}`}>
+        <div className="flex items-center justify-between mb-1">
+          <span className={`text-[11px] uppercase tracking-widest font-medium ${T.captionMuted}`}>Live captions</span>
+          <span className={`text-[10px] ${T.captionMuted}`}>updates every 3s</span>
+        </div>
+        <div className="text-sm min-h-[1.25rem]">
+          {captionLive || <span className={T.captionMuted}>Waiting for speaker…</span>}
+        </div>
+        {captionHistory.length > 1 && (
+          <div className={`mt-2 max-h-24 overflow-y-auto text-xs ${T.captionMuted}`}>
+            {captionHistory.slice(0, -1).map((seg, i) => (
+              <div key={i} className={`py-0.5 border-b last:border-b-0 ${T.captionRow}`}>
+                {seg.startTs > 0 && (
+                  <span className="opacity-60 mr-2">
+                    {new Date(seg.startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+                <span>{seg.text}</span>
+              </div>
+            ))}
+            <div ref={captionBottomRef} />
+          </div>
+        )}
+      </div>
 
       {/* Tabs */}
       <div className={`flex border-b ${T.tabBar}`}>
@@ -422,6 +488,7 @@ export default function AudiencePage() {
             </div>
           </div>
         )}
+        {tab === 'captions' && null}
       </div>
     </div>
   );
