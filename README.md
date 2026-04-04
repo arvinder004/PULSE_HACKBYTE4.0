@@ -140,7 +140,7 @@ pulse/
 | Styling | Tailwind CSS v4 |
 | Real-time state | SpacetimeDB (cloud) |
 | Real-time transport | Server-Sent Events (SSE) |
-| AI reasoning | Google Gemini 1.5 Flash |
+| AI reasoning | Google Gemini 3 Flash |
 | Speech recognition | Web Speech API (browser-native, no cost) |
 | Voice | ElevenLabs TTS |
 | QR codes | react-qrcode-logo |

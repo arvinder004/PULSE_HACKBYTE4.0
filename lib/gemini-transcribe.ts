@@ -1,7 +1,7 @@
 /**
  * Transcribe an audio buffer using Gemini Flash's multimodal audio input.
  * Sends the audio as inline base64 — no file upload step needed.
- * Free tier: 15 RPM / 1500 RPD on gemini-2.0-flash.
+ * Free tier: 15 RPM / 1500 RPD on gemini-3-flash-preview.
  */
 export async function transcribeAudio(
   audioBuffer: Buffer,
@@ -13,7 +13,7 @@ export async function transcribeAudio(
     return null;
   }
 
-  const model = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+  const model = process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview';
   console.log('[PULSE][Gemini-STT] ▶ sending', audioBuffer.length, 'bytes to', model, 'mimeType:', mimeType);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
