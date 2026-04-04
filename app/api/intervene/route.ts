@@ -116,6 +116,10 @@ export async function POST(req: Request) {
     } catch (e: any) {
       console.log('[PULSE][Phase3][Intervene] TTS failed', e?.message || e);
     }
+  } else if (enableTts && !process.env.ELEVENLABS_API_KEY) {
+    console.log('[PULSE][Phase3][Intervene] TTS skipped (missing ELEVENLABS_API_KEY)');
+  } else if (enableTts && result.urgency !== 'high') {
+    console.log('[PULSE][Phase3][Intervene] TTS skipped (urgency)', result.urgency);
   }
 
   const intervention = {

@@ -107,7 +107,7 @@ export default function DashboardNav({
         {mode === 'speaker' && onEndSession && (
           <button
             onClick={onEndSession}
-            className="px-3 py-1 text-xs border rounded-full border-red-400 text-red-500 hover:text-red-600"
+            className="px-3 py-1 text-xs border rounded-full border-red-400 text-red-500 hover:text-red-600 cursor-pointer"
           >
             End
           </button>

@@ -122,7 +122,7 @@ export default function SpeakerView() {
   useEffect(() => {
     // Always stop recognition on unmount.
     return () => { try { transcript.stop(); } catch {} };
-  }, [transcript]);
+  }, [transcript.stop]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -153,7 +153,7 @@ export default function SpeakerView() {
 
     try {
       const id = `${sessionId}:${now}`;
-      spacetime.reducers?.submitCaption?.(id, sessionId, finalText);
+      spacetime.reducers?.submitCaption?.(id, finalText);
       if (DEBUG) console.log('[PULSE][Phase3][Caption] submit', finalText.slice(0, 80));
     } catch (e) {
       if (DEBUG) console.log('[PULSE][Phase3][Caption] submit failed', String(e));
@@ -318,13 +318,14 @@ export default function SpeakerView() {
         }}
         onEndSession={async () => {
           if (!sessionStarted) return;
+          if (!confirm('End the session now?')) return;
           try {
             await fetch('/api/session/end', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ sessionId }),
             });
-            try { spacetime.reducers?.endSession?.(sessionId); } catch {}
+            try { spacetime.reducers?.endSession?.(); } catch {}
             setSessionEnded(true);
             setSessionStarted(false);
             setMicEnabled(false);
@@ -365,9 +366,36 @@ export default function SpeakerView() {
                 setMicEnabled(false);
               }
             }}
-            className="px-6 py-3 rounded-full bg-white/90 text-black text-sm font-semibold shadow"
+            className="px-6 py-3 rounded-full bg-white/90 text-black text-sm font-semibold shadow cursor-pointer"
           >
             Start Session
+          </button>
+        )}
+        {sessionEnded && (
+          <button
+            onClick={async () => {
+              try {
+                await fetch('/api/session/start', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sessionId }),
+                });
+              } catch {}
+              setSessionEnded(false);
+              setSessionStarted(true);
+              setCaptionsEnabled(true);
+              setAiMsg(null);
+              if (DEBUG) console.log('[PULSE][Phase3][Session] restarted');
+              try {
+                transcript.start();
+                setMicEnabled(true);
+              } catch {
+                setMicEnabled(false);
+              }
+            }}
+            className="px-6 py-3 rounded-full bg-white/90 text-black text-sm font-semibold shadow cursor-pointer"
+          >
+            Restart Session
           </button>
         )}
         {sessionEnded && (
@@ -396,6 +424,11 @@ export default function SpeakerView() {
       {sessionStarted && captionsEnabled && (
         <div className={`px-6 pb-3 text-center text-sm ${bottomSub}`}>
           {transcript.liveText || 'Listening…'}
+          {transcript.error && (
+            <div className="mt-1 text-[11px] text-red-400">
+              Speech error: {transcript.error}. Toggle Mic to retry.
+            </div>
+          )}
         </div>
       )}
 

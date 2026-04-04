@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type TranscriptChunk = { text: string; ts: number };
 
@@ -13,13 +13,60 @@ export default function useSpeechTranscript() {
   const [listening, setListening] = useState(false);
   const [liveText, setLiveText] = useState('');
   const [finalText, setFinalText] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const chunksRef = useRef<TranscriptChunk[]>([]);
   const recognitionRef = useRef<any>(null);
   const listeningRef = useRef(false);
+  const suspendedRef = useRef(false);
+  const errorCountRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const envLoggedRef = useRef(false);
+  const micProbeRef = useRef(false);
   const DEBUG = true;
 
   useEffect(() => {
     const win = typeof window !== 'undefined' ? (window as any) : null;
+    if (DEBUG && !envLoggedRef.current) {
+      envLoggedRef.current = true;
+      const conn = typeof navigator !== 'undefined' ? (navigator as any).connection : null;
+      console.log('[PULSE][Phase3][Transcript] env', {
+        secure: win?.isSecureContext,
+        protocol: win?.location?.protocol,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
+        ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+        connection: conn ? {
+          effectiveType: conn.effectiveType,
+          rtt: conn.rtt,
+          downlink: conn.downlink,
+          saveData: conn.saveData,
+        } : undefined,
+      });
+      try {
+        const perms = (navigator as any)?.permissions;
+        if (perms?.query) {
+          perms.query({ name: 'microphone' as PermissionName }).then((p: any) => {
+            console.log('[PULSE][Phase3][Transcript] mic permission', p?.state);
+            p.onchange = () => console.log('[PULSE][Phase3][Transcript] mic permission changed', p?.state);
+          }).catch(() => {
+            console.log('[PULSE][Phase3][Transcript] mic permission query failed');
+          });
+        }
+        const devicesApi = (navigator as any)?.mediaDevices;
+        if (devicesApi?.enumerateDevices) {
+          devicesApi.enumerateDevices().then((devices: MediaDeviceInfo[]) => {
+            const audioInputs = devices.filter(d => d.kind === 'audioinput');
+            console.log('[PULSE][Phase3][Transcript] audio inputs', {
+              count: audioInputs.length,
+              labels: audioInputs.map(d => d.label || 'unknown'),
+            });
+          }).catch(() => {
+            console.log('[PULSE][Phase3][Transcript] enumerateDevices failed');
+          });
+        }
+      } catch {
+        console.log('[PULSE][Phase3][Transcript] mic permission query failed');
+      }
+    }
     const SpeechRecognition = win?.webkitSpeechRecognition ?? win?.SpeechRecognition ?? null;
     if (!SpeechRecognition) {
       setSupported(false);
@@ -31,12 +78,56 @@ export default function useSpeechTranscript() {
     r.continuous = true;
     r.interimResults = true;
     r.lang = 'en-US';
+    if (DEBUG) console.log('[PULSE][Phase3][Transcript] init', {
+      continuous: r.continuous,
+      interimResults: r.interimResults,
+      lang: r.lang,
+    });
 
     r.onstart = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onstart');
+      suspendedRef.current = false;
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onstart', {
+        listening: listeningRef.current,
+        suspended: suspendedRef.current,
+        errors: errorCountRef.current,
+      });
+    };
+
+    r.onaudiostart = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onaudiostart');
+    };
+
+    r.onaudioend = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onaudioend');
+    };
+
+    r.onsoundstart = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onsoundstart');
+    };
+
+    r.onsoundend = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onsoundend');
+    };
+
+    r.onspeechstart = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onspeechstart');
+    };
+
+    r.onspeechend = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onspeechend');
+    };
+
+    r.onnomatch = () => {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onnomatch');
     };
 
     r.onresult = (ev: any) => {
+      if (DEBUG) {
+        console.log('[PULSE][Phase3][Transcript] result', {
+          resultIndex: ev?.resultIndex,
+          results: ev?.results?.length,
+        });
+      }
       const results = ev.results;
       let final = '';
       let interim = '';
@@ -53,20 +144,69 @@ export default function useSpeechTranscript() {
         setFinalText(final.trim());
         if (DEBUG) console.log('[PULSE][Phase3][Transcript] final chunk', final.trim().slice(0, 80));
       }
-      if ((final + interim).trim()) setLiveText((final + interim).trim());
+      if ((final + interim).trim()) {
+        if (error) setError(null);
+        errorCountRef.current = 0;
+        setLiveText((final + interim).trim());
+      }
     };
 
     r.onerror = (ev: any) => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] error', ev?.error || ev?.message || ev);
+      const code = (ev?.error || ev?.message || 'unknown') as string;
+      if (!listeningRef.current || suspendedRef.current) {
+        if (DEBUG) console.log('[PULSE][Phase3][Transcript] error ignored (not listening)', code);
+        return;
+      }
+      setError(code);
+      errorCountRef.current += 1;
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] error', {
+        code,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
+        timeStamp: ev?.timeStamp,
+        type: ev?.type,
+        trusted: ev?.isTrusted,
+      });
+
+      // Fatal errors should stop auto-restart until user toggles mic
+      const fatal = ['not-allowed', 'service-not-allowed', 'not-supported', 'audio-capture', 'bad-grammar', 'language-not-supported'];
+      if (fatal.includes(code)) {
+        suspendedRef.current = true;
+        listeningRef.current = false;
+        setListening(false);
+        if (DEBUG) console.log('[PULSE][Phase3][Transcript] suspended due to fatal error');
+        return;
+      }
+
+      if (code === 'network' && errorCountRef.current >= 3) {
+        suspendedRef.current = true;
+        listeningRef.current = false;
+        setListening(false);
+        if (DEBUG) console.log('[PULSE][Phase3][Transcript] suspended after repeated network errors');
+        return;
+      }
+
+      // Non-fatal errors: retry with backoff to avoid rapid loops
+      const delay = Math.min(1000 * (2 ** Math.min(errorCountRef.current - 1, 4)), 15_000);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = setTimeout(() => {
+        if (!listeningRef.current || suspendedRef.current) return;
+        try { r.start(); } catch {}
+      }, delay);
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] retry in', delay, 'ms');
     };
 
     r.onend = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onend');
-      if (listeningRef.current) {
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onend', {
+        listening: listeningRef.current,
+        suspended: suspendedRef.current,
+        errors: errorCountRef.current,
+      });
+      if (listeningRef.current && !suspendedRef.current) {
         // Auto-restart to keep captions alive
-        setTimeout(() => {
+        if (retryTimerRef.current) return;
+        retryTimerRef.current = setTimeout(() => {
           try { r.start(); } catch {}
-        }, 250);
+        }, 750);
       }
     };
     recognitionRef.current = r;
@@ -77,32 +217,72 @@ export default function useSpeechTranscript() {
     };
   }, []);
 
-  function start() {
+  const start = useCallback(() => {
     try {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      suspendedRef.current = false;
+      setError(null);
+      errorCountRef.current = 0;
       recognitionRef.current?.start?.();
       setListening(true);
       listeningRef.current = true;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] start');
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] start', {
+        hasRecognizer: !!recognitionRef.current,
+        listening: listeningRef.current,
+      });
+
+      if (!micProbeRef.current && typeof navigator !== 'undefined') {
+        micProbeRef.current = true;
+        const mediaDevices = (navigator as any).mediaDevices;
+        if (mediaDevices?.getUserMedia) {
+          mediaDevices.getUserMedia({ audio: true }).then((stream: MediaStream) => {
+            const track = stream.getAudioTracks()[0];
+            console.log('[PULSE][Phase3][Transcript] mic probe ok', {
+              label: track?.label,
+              readyState: track?.readyState,
+              muted: track?.muted,
+              enabled: track?.enabled,
+              settings: track?.getSettings?.(),
+            });
+            stream.getTracks().forEach(t => t.stop());
+          }).catch((err: any) => {
+            console.log('[PULSE][Phase3][Transcript] mic probe failed', err?.name || err?.message || err);
+          });
+        }
+      }
     } catch {
       if (DEBUG) console.log('[PULSE][Phase3][Transcript] start failed');
     }
-  }
+  }, []);
 
-  function stop() {
+  const stop = useCallback(() => {
     try {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      suspendedRef.current = true;
       recognitionRef.current?.stop?.();
       setListening(false);
       listeningRef.current = false;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] stop');
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] stop', {
+        listening: listeningRef.current,
+      });
     } catch {
       if (DEBUG) console.log('[PULSE][Phase3][Transcript] stop failed');
     }
-  }
+  }, []);
 
-  function getLast60s() {
+  const getLast60s = useCallback(() => {
     const cutoff = Date.now() - 60_000;
     return chunksRef.current.filter(c => c.ts >= cutoff).map(c => c.text).join(' ');
-  }
+  }, []);
 
-  return { supported, listening, liveText, finalText, start, stop, getLast60s } as const;
+  return useMemo(() => ({
+    supported,
+    listening,
+    liveText,
+    finalText,
+    error,
+    start,
+    stop,
+    getLast60s,
+  }), [supported, listening, liveText, finalText, error, start, stop, getLast60s]);
 }
