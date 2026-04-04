@@ -12,11 +12,7 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ['pulse.venoms.app'],
   experimental: {},
   typescript: {
-    // Type errors are caught in CI — don't block production builds
     ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
   },
   async headers() {
     return [
