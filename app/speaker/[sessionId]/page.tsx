@@ -7,10 +7,21 @@ import InterventionCard from '@/components/InterventionCard';
 import useSpeechTranscript from '@/lib/useSpeechTranscript';
 import useAudioRecorder from '@/lib/useAudioRecorder';
 import VoicePlayer from '@/components/VoicePlayer';
+import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 
 // Room state distilled to a single ambient signal
 type RoomState = 'good' | 'check' | 'confused' | 'fast' | 'slow';
+
+type SignalKey = 'confused' | 'clear' | 'excited' | 'slow_down' | 'question';
+
+const SIGNAL_EMOJI: Record<SignalKey, string> = {
+  confused:  '😕',
+  clear:     '✅',
+  excited:   '🔥',
+  slow_down: '🐢',
+  question:  '✋',
+};
 
 function getRoomState(counts: Record<string, number>): RoomState {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -59,6 +70,8 @@ export default function SpeakerView() {
   const [sessionEnded, setSessionEnded] = useState(false);
   const [ttsAudioBase64, setTtsAudioBase64] = useState<string | null>(null);
   const [ttsContentType, setTtsContentType] = useState<string | null>(null);
+  const [reactions, setReactions] = useState<FloatingReaction[]>([]);
+  const reactionId = useRef(0);
   const DEBUG = true;
 
   const countsRef = useRef(counts);
@@ -147,7 +160,7 @@ export default function SpeakerView() {
     }
   }, [sessionId, sessionStarted, captionsEnabled, transcript.finalText, spacetime.reducers, DEBUG]);
 
-  // SSE — live signal counts
+  // SSE — live signal counts + floating reactions
   useEffect(() => {
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
@@ -159,6 +172,15 @@ export default function SpeakerView() {
         } else if (msg.type === 'signal') {
           const key = msg.signal.signalType as string;
           setCounts(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
+          
+          // Add floating reaction
+          const emoji = SIGNAL_EMOJI[key as SignalKey];
+          if (emoji) {
+            const id = ++reactionId.current;
+            const x = 10 + Math.random() * 80;
+            setReactions(prev => [...prev.slice(-20), { id, emoji, x }]);
+            setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
+          }
         } else if (msg.type === 'intervention') {
           setAiMsg(msg.message ?? null);
           setTimeout(() => setAiMsg(null), 8000);
@@ -245,6 +267,7 @@ export default function SpeakerView() {
 
   return (
     <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${bg}`}>
+      <FloatingReactions reactions={reactions} />
 
       <DashboardNav
         sessionId={sessionId}

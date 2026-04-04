@@ -1,12 +1,23 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
 import PulseVisualizer from '@/components/PulseVisualizer';
+import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 
 type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
+
+type SignalKey = 'confused' | 'clear' | 'excited' | 'slow_down' | 'question';
+
+const SIGNAL_EMOJI: Record<SignalKey, string> = {
+  confused:  '😕',
+  clear:     '✅',
+  excited:   '🔥',
+  slow_down: '🐢',
+  question:  '✋',
+};
 
 const SIGNAL_TYPES = [
   { key: 'confused',  label: 'Confused'  },
@@ -83,6 +94,8 @@ export default function ProducerDashboard() {
   const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [audienceCount, setAudienceCount] = useState(0);
   const [audioFiles, setAudioFiles] = useState<Array<{ id: string; filename: string; ts?: string | null }>>([]);
+  const [reactions, setReactions] = useState<FloatingReaction[]>([]);
+  const reactionId = useRef(0);
   const DEBUG = true;
 
   const spacetime = useSpacetimeSession(sessionId);
@@ -108,6 +121,15 @@ export default function ProducerDashboard() {
           const key = msg.signal.signalType as string;
           setCounts(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
           setAudienceCount(prev => prev + 1);
+
+          // Add floating reaction
+          const emoji = SIGNAL_EMOJI[key as SignalKey];
+          if (emoji) {
+            const id = ++reactionId.current;
+            const x = 10 + Math.random() * 80;
+            setReactions(prev => [...prev.slice(-20), { id, emoji, x }]);
+            setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
+          }
         }
       } catch { /* ignore */ }
     };
@@ -145,6 +167,7 @@ export default function ProducerDashboard() {
 
   return (
     <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${T.root}`}>
+      <FloatingReactions reactions={reactions} />
 
       <DashboardNav
         sessionId={sessionId}
