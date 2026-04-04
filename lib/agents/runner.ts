@@ -1,11 +1,18 @@
 /**
- * Agent runner — calls Gemini with a system prompt + user message.
- * When ArmorIQ is configured, the call is routed through the ArmorIQ
- * proxy for cryptographic intent verification.
- * When not configured (dev/no key), calls Gemini directly as fallback.
+ * Agent runner — calls Gemini directly with a system prompt + user message.
+ *
+ * ArmorIQ's role in this architecture:
+ *   - It acts as a security proxy that verifies incoming requests to
+ *     /api/suggest and /api/questions before they reach the route handlers.
+ *   - The route handlers call verifyAgentAuth() to check the ArmorIQ-issued
+ *     bearer token on each request.
+ *   - Gemini is always called directly from here — ArmorIQ does not proxy LLM calls.
+ *
+ * Flow:
+ *   Caller → ArmorIQ proxy (intent verified) → /api/suggest → runSuggester() → Gemini → response
  */
 
-import { parseAgentJSON, isArmorIQConfigured, runAgent, MCP, ACTION } from '@/lib/armoriq';
+import { parseAgentJSON } from '@/lib/armoriq';
 import type { SuggestionOutput } from './suggester';
 import type { QuestionClassification } from './question-classifier';
 import { SUGGESTER_SYSTEM_PROMPT } from './suggester';
@@ -13,7 +20,7 @@ import { QUESTION_CLASSIFIER_SYSTEM_PROMPT } from './question-classifier';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
 
-async function callGeminiDirect(systemPrompt: string, userMessage: string): Promise<string> {
+async function callGemini(systemPrompt: string, userMessage: string): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
@@ -36,7 +43,7 @@ async function callGeminiDirect(systemPrompt: string, userMessage: string): Prom
   return json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
 }
 
-// ── Suggester ─────────────────────────────────────────────────────────────────
+// ── Suggester (Agent 2) ───────────────────────────────────────────────────────
 
 export async function runSuggester(userMessage: string): Promise<SuggestionOutput> {
   const fallback: SuggestionOutput = {
@@ -52,24 +59,7 @@ export async function runSuggester(userMessage: string): Promise<SuggestionOutpu
   };
 
   try {
-    let raw: string;
-
-    if (isArmorIQConfigured()) {
-      // Route through ArmorIQ proxy for verified execution
-      const result = await runAgent(MCP.SUGGESTER, ACTION.RUN_SUGGESTER, {
-        system_prompt: SUGGESTER_SYSTEM_PROMPT,
-        user_message:  userMessage,
-      }, { prompt: 'Run Suggester agent for live session coaching' });
-
-      // The MCP returns { text: "..." } or the raw string
-      raw = typeof result.data === 'string'
-        ? result.data
-        : (result.data as any)?.text ?? JSON.stringify(result.data);
-    } else {
-      // Direct Gemini fallback (dev mode)
-      raw = await callGeminiDirect(SUGGESTER_SYSTEM_PROMPT, userMessage);
-    }
-
+    const raw = await callGemini(SUGGESTER_SYSTEM_PROMPT, userMessage);
     return parseAgentJSON<SuggestionOutput>(raw);
   } catch (e) {
     console.error('[ArmorIQ][Suggester] runner error', String(e));
@@ -77,7 +67,7 @@ export async function runSuggester(userMessage: string): Promise<SuggestionOutpu
   }
 }
 
-// ── Question Classifier ───────────────────────────────────────────────────────
+// ── Question Classifier (Agent 3) ─────────────────────────────────────────────
 
 export async function runQuestionClassifier(userMessage: string): Promise<QuestionClassification> {
   const fallback: QuestionClassification = {
@@ -91,21 +81,7 @@ export async function runQuestionClassifier(userMessage: string): Promise<Questi
   };
 
   try {
-    let raw: string;
-
-    if (isArmorIQConfigured()) {
-      const result = await runAgent(MCP.QUESTION_CLASSIFIER, ACTION.RUN_QUESTION_CLASSIFIER, {
-        system_prompt: QUESTION_CLASSIFIER_SYSTEM_PROMPT,
-        user_message:  userMessage,
-      }, { prompt: 'Classify audience question for live session' });
-
-      raw = typeof result.data === 'string'
-        ? result.data
-        : (result.data as any)?.text ?? JSON.stringify(result.data);
-    } else {
-      raw = await callGeminiDirect(QUESTION_CLASSIFIER_SYSTEM_PROMPT, userMessage);
-    }
-
+    const raw = await callGemini(QUESTION_CLASSIFIER_SYSTEM_PROMPT, userMessage);
     return parseAgentJSON<QuestionClassification>(raw);
   } catch (e) {
     console.error('[ArmorIQ][QuestionClassifier] runner error', String(e));
