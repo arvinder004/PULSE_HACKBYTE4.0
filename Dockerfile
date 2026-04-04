@@ -10,6 +10,7 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
 COPY . .
 
 # Build-time public env vars (non-secret, baked into the JS bundle)
