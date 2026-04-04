@@ -16,6 +16,8 @@ const geistMono = Geist_Mono({
   preload: false,
 });
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: "PULSE",
   description: "PULSE",
