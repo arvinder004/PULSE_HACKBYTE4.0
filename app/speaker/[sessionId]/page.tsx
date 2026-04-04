@@ -749,11 +749,12 @@ export default function SpeakerView() {
         )}
       </div>
 
-      {/* Audience join link — bottom */}
-      <div className="flex flex-col items-center gap-1 pb-6">
-        <span className={`text-[11px] uppercase tracking-widest ${bottomText}`}>Audience</span>
+      {/* Audience join — QR + link */}
+      <div className="flex flex-col items-center gap-3 pb-8">
+        <span className={`text-[11px] uppercase tracking-widest ${bottomText}`}>Audience join</span>
+        <AudienceQR sessionId={sessionId} dark={dark} />
         <span className={`text-xs font-mono ${bottomSub}`}>/audience/{sessionId}</span>
-        <span className={`text-[10px] font-mono mt-0.5 ${bottomText}`}>Primary judge: /audience/{sessionId}?primary=1</span>
+        <span className={`text-[10px] font-mono ${bottomText}`}>Primary judge: /audience/{sessionId}?primary=1</span>
       </div>
 
       {/* Questions toggle button */}
@@ -831,6 +832,33 @@ export default function SpeakerView() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── AudienceQR ────────────────────────────────────────────────────────────────
+// Lazy-loaded so the QR canvas only renders client-side
+import dynamic from 'next/dynamic';
+const QRCode = dynamic(() => import('react-qrcode-logo').then(m => m.QRCode), { ssr: false });
+
+function AudienceQR({ sessionId, dark }: { sessionId: string; dark: boolean }) {
+  const [origin, setOrigin] = useState('');
+  useEffect(() => { setOrigin(window.location.origin); }, []);
+  if (!origin) return <div className="w-32 h-32" />;
+
+  const url = `${origin}/audience/${sessionId}`;
+  return (
+    <div className={`p-2 rounded-2xl ${dark ? 'bg-white' : 'bg-white border border-black/10'}`}>
+      <QRCode
+        value={url}
+        size={128}
+        bgColor="#ffffff"
+        fgColor="#000000"
+        qrStyle="dots"
+        eyeRadius={6}
+        removeQrCodeBehindLogo={false}
+        logoPadding={0}
+      />
     </div>
   );
 }
