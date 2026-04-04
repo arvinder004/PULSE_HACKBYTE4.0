@@ -107,9 +107,5 @@ export async function POST(req: NextRequest) {
 
   console.log('[PULSE][Coach] saved report', { sessionId, reportId: report._id?.toString() });
 
-  // Delete mini-batch segments ONLY after successful save
-  const deleteResult = await SegmentSummary.deleteMany({ sessionId });
-  console.log('[PULSE][Coach] deleted mini-batch segments', { sessionId, deleted: deleteResult.deletedCount });
-
   return NextResponse.json({ ok: true, cached: false, report });
 }

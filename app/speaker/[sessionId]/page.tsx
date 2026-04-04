@@ -437,6 +437,7 @@ export default function SpeakerView() {
         signalCount={total}
         transcriptLive={transcriptLive}
         confirmEnd={confirmEnd}
+        sessionActive={sessionStarted && !sessionEnded}
         micSupported={transcript.supported}
         micEnabled={micEnabled}
         micDevices={transcript.devices}

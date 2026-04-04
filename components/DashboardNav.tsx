@@ -11,6 +11,7 @@ interface DashboardNavProps {
   signalCount?: number;
   transcriptLive?: boolean;
   confirmEnd?: boolean;
+  sessionActive?: boolean; // true only while session is running
   // Optional speaker controls
   micSupported?: boolean;
   micEnabled?: boolean;
@@ -34,6 +35,7 @@ export default function DashboardNav({
   signalCount = 0,
   transcriptLive = false,
   confirmEnd = false,
+  sessionActive = false,
   micSupported = true,
   micEnabled = false,
   onToggleMic,
@@ -52,6 +54,8 @@ export default function DashboardNav({
   const t = dark
     ? { nav: 'bg-black border-white/10', label: 'text-white/30', muted: 'text-white/20', toggle: 'bg-white/10 text-white/60 hover:text-white border-white/10', tagBorder: 'border-white/10 text-white/40', tagActive: 'border-white/40 text-white bg-white/5' }
     : { nav: 'bg-white border-black/10', label: 'text-black/40', muted: 'text-black/25', toggle: 'bg-black/6 text-black/50 hover:text-black border-black/10', tagBorder: 'border-black/15 text-black/50', tagActive: 'border-black/50 text-black bg-black/5' };
+
+  const disabledCls = 'opacity-30 cursor-not-allowed pointer-events-none select-none';
 
   const switchTo = mode === 'speaker' ? 'producer' : 'speaker';
 
@@ -105,7 +109,8 @@ export default function DashboardNav({
         {mode === 'speaker' && onToggleAiPause && (
           <button
             onClick={onToggleAiPause}
-            className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle}`}
+            disabled={!sessionActive}
+            className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle} ${!sessionActive ? disabledCls : ''}`}
           >
             {aiPaused ? 'AI Paused' : 'AI On'}
           </button>
@@ -115,8 +120,8 @@ export default function DashboardNav({
         {mode === 'speaker' && onToggleMic && (
           <button
             onClick={onToggleMic}
-            disabled={!micSupported}
-            className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle} ${!micSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={!micSupported || !sessionActive}
+            className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle} ${(!micSupported || !sessionActive) ? disabledCls : ''}`}
             title={micSupported ? 'Toggle microphone transcript' : 'Deepgram streaming not supported in this browser'}
           >
             {micSupported ? (micEnabled ? 'Mic On' : 'Mic Off') : 'Mic N/A'}
@@ -127,7 +132,8 @@ export default function DashboardNav({
         {mode === 'speaker' && onToggleCaptions && (
           <button
             onClick={onToggleCaptions}
-            className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle}`}
+            disabled={!sessionActive}
+            className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle} ${!sessionActive ? disabledCls : ''}`}
           >
             {captionsEnabled ? 'CC On' : 'CC Off'}
           </button>
@@ -152,10 +158,13 @@ export default function DashboardNav({
         {mode === 'speaker' && onEndSession && (
           <button
             onClick={onEndSession}
+            disabled={!sessionActive}
             className={`px-3 py-1 text-xs border rounded-full transition-colors cursor-pointer ${
-              confirmEnd
-                ? 'border-red-500 bg-red-500 text-white'
-                : 'border-red-400 text-red-500 hover:text-red-600'
+              !sessionActive
+                ? `border-red-400/30 text-red-500/30 ${disabledCls}`
+                : confirmEnd
+                  ? 'border-red-500 bg-red-500 text-white'
+                  : 'border-red-400 text-red-500 hover:text-red-600'
             }`}
           >
             {confirmEnd ? 'Confirm?' : 'End'}
