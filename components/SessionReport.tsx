@@ -58,7 +58,7 @@ function EmphasisBadge({ children, color }: { children: React.ReactNode; color: 
   useEffect(() => { const t = setTimeout(() => setPop(true), 400); return () => clearTimeout(t); }, []);
   return (
     <span
-      className={`px-2 py-0.5 rounded-full text-[11px] border ${color}`}
+      className={`px-2 py-0.5 rounded-full text-[12px] border ${color}`}
       style={{
         transform: pop ? 'scale(1)' : 'scale(0.6)',
         opacity: pop ? 1 : 0,
@@ -84,13 +84,13 @@ export default function SessionReport({ coachReport, dark, captionMuted }: Props
       {/* Overall + Strengths/Improvements */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <AnimatedCard delay={0} className={`md:col-span-2 rounded-2xl border px-5 py-5 ${cardBg} ${border}`}>
-          <div className={`text-[10px] uppercase tracking-widest mb-2 ${captionMuted}`}>Session Overview</div>
-          <p className={`text-sm leading-relaxed ${textMain}`}>{coachReport.overallSummary}</p>
+          <div className={`text-[12px] uppercase tracking-widest mb-2 ${captionMuted}`}>Session Overview</div>
+          <p className={`text-2xl leading-relaxed ${textMain}`}>{coachReport.overallSummary}</p>
         </AnimatedCard>
 
         <div className="flex flex-col gap-4">
           <AnimatedCard delay={80} className={`rounded-2xl border px-4 py-4 flex-1 ${cardBg} ${border}`}>
-            <div className="text-[10px] uppercase tracking-widest mb-2 text-emerald-400">Strengths</div>
+            <div className="text-[12px] uppercase tracking-widest mb-2 text-emerald-400">Strengths</div>
             <div className="flex flex-wrap gap-1.5">
               {coachReport.topStrengths?.map((s, i) => (
                 <EmphasisBadge key={i} color="bg-emerald-500/15 text-emerald-400 border-emerald-500/20">{s}</EmphasisBadge>
@@ -99,7 +99,7 @@ export default function SessionReport({ coachReport, dark, captionMuted }: Props
             </div>
           </AnimatedCard>
           <AnimatedCard delay={140} className={`rounded-2xl border px-4 py-4 flex-1 ${cardBg} ${border}`}>
-            <div className="text-[10px] uppercase tracking-widest mb-2 text-orange-400">To Improve</div>
+            <div className="text-[12px] uppercase tracking-widest mb-2 text-orange-400">To Improve</div>
             <div className="flex flex-wrap gap-1.5">
               {coachReport.topImprovements?.map((s, i) => (
                 <EmphasisBadge key={i} color="bg-orange-500/15 text-orange-400 border-orange-500/20">{s}</EmphasisBadge>
@@ -113,7 +113,7 @@ export default function SessionReport({ coachReport, dark, captionMuted }: Props
       {/* Segment cards — 2-col grid */}
       {segments.length > 0 && (
         <div>
-          <div className={`text-[10px] uppercase tracking-widest mb-3 ${captionMuted}`}>Segment Breakdown</div>
+          <div className={`text-[12px] uppercase tracking-widest mb-3 ${captionMuted}`}>Segment Breakdown</div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {segments.map((seg, i) => (
               <AnimatedCard
@@ -124,16 +124,16 @@ export default function SessionReport({ coachReport, dark, captionMuted }: Props
                 {/* Header */}
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${dark ? 'bg-white/10 text-white/50' : 'bg-black/10 text-black/50'}`}>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-bold ${dark ? 'bg-white/10 text-white/50' : 'bg-black/10 text-black/50'}`}>
                       {i + 1}
                     </span>
-                    <span className={`text-[10px] uppercase tracking-widest font-medium ${captionMuted}`}>
+                    <span className={`text-[12px] uppercase tracking-widest font-medium ${captionMuted}`}>
                       {seg.timeLabel || `Segment ${i + 1}`}
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-1 justify-end">
                     {seg.focusTags?.map((tag, j) => (
-                      <span key={j} className={`px-1.5 py-0.5 rounded-full text-[9px] border ${dark ? 'border-white/10 text-white/30' : 'border-black/10 text-black/30'}`}>
+                      <span key={j} className={`px-1.5 py-0.5 rounded-full text-[11px] border ${dark ? 'border-white/10 text-white/30' : 'border-black/10 text-black/30'}`}>
                         {tag}
                       </span>
                     ))}
@@ -143,7 +143,7 @@ export default function SessionReport({ coachReport, dark, captionMuted }: Props
                 {/* Bullets */}
                 <ul className="flex flex-col gap-2">
                   {seg.bullets?.map((b, j) => (
-                    <li key={j} className="flex gap-2 text-sm leading-snug">
+                    <li key={j} className="flex gap-2 text-base leading-snug">
                       <span className={`mt-0.5 shrink-0 text-emerald-400`}>▸</span>
                       <span className={dark ? 'text-white/80' : 'text-black/80'}>{b}</span>
                     </li>

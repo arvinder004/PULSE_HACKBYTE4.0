@@ -582,20 +582,24 @@ export default function SpeakerView() {
             captionMuted={captionMuted}
           />
         )}
-        <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
-          <div className="flex flex-col items-center gap-1 text-center">
-            <span className={`text-lg font-semibold transition-colors duration-700 ${cfg.color}`}>
-              {cfg.label}
-            </span>
-          </div>
-        </div>
-        <p className={`text-sm ${subText}`}>{cfg.sub}</p>
+        {!sessionEnded && (
+          <>
+            <div className={`w-40 h-40 rounded-full flex items-center justify-center ring-4 transition-all duration-700 ${cfg.bg} ${cfg.ring}`}>
+              <div className="flex flex-col items-center gap-1 text-center">
+                <span className={`text-lg font-semibold transition-colors duration-700 ${cfg.color}`}>
+                  {cfg.label}
+                </span>
+              </div>
+            </div>
+            <p className={`text-sm ${subText}`}>{cfg.sub}</p>
+          </>
+        )}
 
-        {(sessionStarted && captionsEnabled || sessionEnded) && (
+        {sessionStarted && captionsEnabled && !sessionEnded && (
           <div className={`mt-6 w-full max-w-xl border rounded-2xl px-4 py-3 ${captionPanel}`}>
             <div className="flex items-center justify-between gap-3">
               <span className={`text-[11px] uppercase tracking-widest font-medium ${captionMuted}`}>
-                {sessionEnded ? 'Transcript' : 'Live captions'}
+                Live captions
               </span>
               <button
                 onClick={async () => {
@@ -626,28 +630,19 @@ export default function SpeakerView() {
                 {captionsExpanded ? 'Collapse' : 'Expand'}
               </button>
             </div>
-
-            {/* Only show live mic text when session is active */}
-            {!sessionEnded && (
-              <>
-                <div className="mt-2 text-sm">
-                  {transcript.liveText || 'Listening…'}
-                </div>
-                {transcript.error && (
-                  <div className="mt-2 text-[11px] text-red-400">
-                    Transcription error: {transcript.error}. Toggle Mic to retry.
-                  </div>
-                )}
-              </>
+            <div className="mt-2 text-sm">
+              {transcript.liveText || 'Listening…'}
+            </div>
+            {transcript.error && (
+              <div className="mt-2 text-[11px] text-red-400">
+                Transcription error: {transcript.error}. Toggle Mic to retry.
+              </div>
             )}
-
             {captionsExpanded && (
               <div className={`mt-3 max-h-44 overflow-y-auto text-xs ${captionMuted}`}>
-                {historyLoading && (
-                  <div className="py-2 opacity-60">Loading…</div>
-                )}
+                {historyLoading && <div className="py-2 opacity-60">Loading…</div>}
                 {!historyLoading && transcriptHistory.length === 0 && captionHistory.length === 0 && (
-                  <div className="py-2">{sessionEnded ? 'No transcript available.' : 'No captions yet.'}</div>
+                  <div className="py-2">No captions yet.</div>
                 )}
                 {!historyLoading && transcriptHistory.length > 0 && (
                   <>
@@ -664,8 +659,7 @@ export default function SpeakerView() {
                     ))}
                   </>
                 )}
-                {/* Only show live caption history during active session */}
-                {!sessionEnded && !historyLoading && captionHistory.length > 0 && (
+                {!historyLoading && captionHistory.length > 0 && (
                   <>
                     <div className="py-1 opacity-40 text-[10px] uppercase tracking-widest mt-1">Live captions</div>
                     {captionHistory.map((c: any) => {
