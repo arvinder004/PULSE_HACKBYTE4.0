@@ -8,6 +8,7 @@ import useSpeechTranscript from '@/lib/useSpeechTranscript';
 import useAudioRecorder from '@/lib/useAudioRecorder';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
+import { useTheme } from '@/lib/useTheme';
 
 // Room state distilled to a single ambient signal
 type RoomState = 'good' | 'check' | 'confused' | 'fast' | 'slow';
@@ -60,7 +61,7 @@ export default function SpeakerView() {
   const [counts,   setCounts]   = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [mounted,  setMounted]  = useState(false);
   const [aiMsg,    setAiMsg]    = useState<string | null>(null);
-  const [dark,     setDark]     = useState(true);
+  const { dark, setDark } = useTheme(true);
   const transcript = useSpeechTranscript();
   const [micEnabled, setMicEnabled] = useState(false);
   const [aiPausedUntil, setAiPausedUntil] = useState(0);
@@ -272,10 +273,10 @@ export default function SpeakerView() {
   const total     = Object.values(counts).reduce((a, b) => a + b, 0);
 
   const bg = dark ? 'bg-black text-white' : 'bg-white text-black';
-  const subText = dark ? 'text-white/30' : 'text-black/30';
-  const whisper = dark ? 'bg-white/5 border-white/10 text-white/70' : 'bg-black/5 border-black/10 text-black/60';
-  const bottomText = dark ? 'text-white/20' : 'text-black/20';
-  const bottomSub = dark ? 'text-white/30' : 'text-black/30';
+  const subText = dark ? 'text-white/30' : 'text-black/70';
+  const whisper = dark ? 'bg-white/5 border-white/10 text-white/70' : 'bg-black/5 border-black/10 text-black/80';
+  const bottomText = dark ? 'text-white/20' : 'text-black/50';
+  const bottomSub = dark ? 'text-white/30' : 'text-black/60';
   const aiPaused = Date.now() < aiPausedUntil;
 
   return (
@@ -286,7 +287,7 @@ export default function SpeakerView() {
         sessionId={sessionId}
         mode="speaker"
         dark={dark}
-        onToggleDark={() => setDark(v => !v)}
+        onToggleDark={() => setDark(!dark)}
         signalCount={total}
         transcriptLive={transcriptLive}
         confirmEnd={confirmEnd}
@@ -438,9 +439,9 @@ export default function SpeakerView() {
                 const intensity = danger
                   ? pct >= 0.5 ? 'bg-red-500/80 text-white ring-red-400/40'
                     : pct >= 0.25 ? 'bg-orange-400/70 text-white ring-orange-400/30'
-                    : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10'
+                    : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black ring-black/15'
                   : pct >= 0.5 ? 'bg-emerald-500/70 text-white ring-emerald-400/30'
-                    : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black/60 ring-black/10';
+                    : dark ? 'bg-white/10 text-white/70 ring-white/10' : 'bg-black/8 text-black ring-black/15';
                 return (
                   <div key={key} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ring-1 text-xs font-medium transition-all duration-500 ${intensity}`}>
                     <span>{emoji}</span>

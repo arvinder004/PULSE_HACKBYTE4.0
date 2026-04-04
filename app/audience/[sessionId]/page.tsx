@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { getFingerprint } from '@/lib/fingerprint';
 import SignalButtons, { type SignalKey } from '@/components/SignalButtons';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
+import { useTheme } from '@/lib/useTheme';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +28,7 @@ export default function AudiencePage() {
   const [session,  setSession]  = useState<{ speakerName: string; topic: string } | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [tab,      setTab]      = useState<Tab>('react');
-  const [dark,     setDark]     = useState(false);
+  const { dark, setDark } = useTheme(false);
 
   // signals
   const [lastSignal,    setLastSignal]    = useState<SignalKey | null>(null);
@@ -247,37 +248,37 @@ export default function AudiencePage() {
   if (notFound) return (
     <div className={`flex items-center justify-center min-h-screen px-4 ${dark ? 'bg-black' : 'bg-zinc-50'}`}>
       <div className="text-center">
-        <p className={`text-sm uppercase tracking-widest mb-2 ${dark ? 'text-zinc-400' : 'text-zinc-500'}`}>Session not found</p>
-        <p className={`text-xs ${dark ? 'text-zinc-500' : 'text-zinc-400'}`}>The session may have ended or the link is invalid.</p>
+        <p className={`text-sm uppercase tracking-widest mb-2 ${dark ? 'text-zinc-400' : 'text-zinc-700'}`}>Session not found</p>
+        <p className={`text-xs ${dark ? 'text-zinc-500' : 'text-zinc-600'}`}>The session may have ended or the link is invalid.</p>
       </div>
     </div>
   );
 
   if (!session) return (
     <div className={`flex items-center justify-center min-h-screen px-4 ${dark ? 'bg-black' : 'bg-zinc-50'}`}>
-      <p className={`text-sm ${dark ? 'text-zinc-500' : 'text-zinc-400'}`}>Loading…</p>
+      <p className={`text-sm ${dark ? 'text-zinc-500' : 'text-zinc-600'}`}>Loading…</p>
     </div>
   );
 
   const T = {
     root:        dark ? 'bg-black text-white'        : 'bg-zinc-50 text-zinc-900',
     header:      dark ? 'bg-zinc-950 border-white/10' : 'bg-white border-zinc-200',
-    headerLabel: dark ? 'text-white/30'               : 'text-zinc-400',
+    headerLabel: dark ? 'text-white/30'               : 'text-zinc-600',
     headerTitle: dark ? 'text-white'                  : 'text-zinc-900',
-    headerSub:   dark ? 'text-white/50'               : 'text-zinc-500',
+    headerSub:   dark ? 'text-white/50'               : 'text-zinc-700',
     tabBar:      dark ? 'bg-zinc-950 border-white/10' : 'bg-white border-zinc-200',
     tabActive:   dark ? 'border-white text-white'     : 'border-zinc-900 text-zinc-900',
-    tabInactive: dark ? 'border-transparent text-white/30 hover:text-white/60' : 'border-transparent text-zinc-400 hover:text-zinc-600',
-    sectionLabel:dark ? 'text-white/30'               : 'text-zinc-400',
-    feedback:    dark ? 'text-white/50'               : 'text-zinc-500',
-    textarea:    dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30 focus:ring-white/10' : 'border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-zinc-900/10',
-    charCount:   dark ? 'text-white/30'               : 'text-zinc-400',
+    tabInactive: dark ? 'border-transparent text-white/30 hover:text-white/60' : 'border-transparent text-zinc-500 hover:text-zinc-800',
+    sectionLabel:dark ? 'text-white/30'               : 'text-zinc-600',
+    feedback:    dark ? 'text-white/50'               : 'text-zinc-700',
+    textarea:    dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30 focus:ring-white/10' : 'border-zinc-300 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:ring-zinc-900/10',
+    charCount:   dark ? 'text-white/30'               : 'text-zinc-600',
     submitBtn:   dark ? 'bg-white text-black hover:bg-white/80' : 'bg-zinc-900 text-white hover:bg-zinc-700',
-    darkToggle:  dark ? 'text-white/30 hover:text-white/60' : 'text-zinc-400 hover:text-zinc-600',
+    darkToggle:  dark ? 'text-white/30 hover:text-white/60' : 'text-zinc-500 hover:text-zinc-800',
     chatBubbleUser: dark ? 'bg-white text-black' : 'bg-zinc-900 text-white',
     chatBubbleBot:  dark ? 'bg-white/10 text-white' : 'bg-white text-zinc-900 border border-zinc-200',
-    chatStale:      dark ? 'text-yellow-400/60' : 'text-yellow-600',
-    chatInput:   dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30' : 'border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400',
+    chatStale:      dark ? 'text-yellow-400/60' : 'text-yellow-700',
+    chatInput:   dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30' : 'border-zinc-300 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500',
   };
 
   return (
@@ -297,7 +298,7 @@ export default function AudiencePage() {
           )}
         </div>
         <button
-          onClick={() => setDark(v => !v)}
+          onClick={() => setDark(!dark)}
           className={`mt-1 text-lg transition-colors ${T.darkToggle}`}
           aria-label="Toggle dark mode"
         >

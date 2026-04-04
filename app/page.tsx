@@ -83,7 +83,7 @@ export default function Home() {
 
         <div className="mb-8">
           <h1 className="text-2xl font-semibold tracking-tight">PULSE</h1>
-          <p className="text-sm text-black/40 mt-1">Real-time audience intelligence</p>
+          <p className="text-sm text-black/70 mt-1">Real-time audience intelligence</p>
         </div>
 
         {/* Auth forms */}
@@ -105,7 +105,7 @@ export default function Home() {
               {submitting ? '…' : view === 'login' ? 'Sign in' : 'Create account'}
             </button>
 
-            <p className="text-xs text-black/40 text-center">
+            <p className="text-xs text-black/70 text-center">
               {view === 'login' ? "Don't have an account? " : 'Already have an account? '}
               <button
                 type="button"
@@ -122,8 +122,8 @@ export default function Home() {
         {view === 'session' && user && (
           <form onSubmit={handleCreateSession} className="flex flex-col gap-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm text-black/50">Signed in as <span className="text-black font-medium">{user.name}</span></p>
-              <button type="button" onClick={handleLogout} className="text-xs text-black/30 hover:text-black underline underline-offset-2">
+              <p className="text-sm text-black/70">Signed in as <span className="text-black font-medium">{user.name}</span></p>
+              <button type="button" onClick={handleLogout} className="text-xs text-black/50 hover:text-black underline underline-offset-2">
                 Sign out
               </button>
             </div>
@@ -152,7 +152,7 @@ function Field({ label, name, type, placeholder, defaultValue }: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs text-black/50 font-medium uppercase tracking-wide">{label}</label>
+      <label className="text-xs text-black/70 font-medium uppercase tracking-wide">{label}</label>
       <input
         name={name}
         type={type}

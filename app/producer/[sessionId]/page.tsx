@@ -6,6 +6,7 @@ import DashboardNav from '@/components/DashboardNav';
 import PulseVisualizer from '@/components/PulseVisualizer';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
+import { useTheme } from '@/lib/useTheme';
 
 type Tab = 'ai' | 'questions' | 'clarify' | 'poll';
 
@@ -66,20 +67,20 @@ const T_LIGHT = {
   nav:         'bg-white border-black/10',
   divider:     'bg-black/5',
   panel:       'bg-white',
-  label:       'text-black/40',
-  muted:       'text-black/25',
-  sub:         'text-black/50',
+  label:       'text-black/70',
+  muted:       'text-black/60',
+  sub:         'text-black/75',
   bar:         'bg-black/10',
   barFill:     'bg-black',
   barLit:      'bg-black/20',
   barDim:      'bg-black/6',
-  tagBorder:   'border-black/15 text-black/50',
-  tagActive:   'border-black/50 text-black',
+  tagBorder:   'border-black/20 text-black/70',
+  tagActive:   'border-black/60 text-black',
   tabActive:   'text-black border-black',
-  tabInactive: 'text-black/30 border-transparent hover:text-black/60',
+  tabInactive: 'text-black/50 border-transparent hover:text-black/80',
   tabBorder:   'border-black/10',
   totalCard:   'border-black/10',
-  qrBox:       'border-black/10 text-black/25',
+  qrBox:       'border-black/10 text-black/50',
   dot:         'bg-black border-white',
 };
 
@@ -89,7 +90,7 @@ export default function ProducerDashboard() {
 
   const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
   const [tab, setTab] = useState<Tab>('ai');
-  const [dark, setDark] = useState(true);
+  const { dark, setDark } = useTheme(true);
   const [mounted, setMounted] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [audienceCount, setAudienceCount] = useState(0);
@@ -190,7 +191,7 @@ export default function ProducerDashboard() {
         sessionId={sessionId}
         mode="producer"
         dark={dark}
-        onToggleDark={() => setDark(v => !v)}
+        onToggleDark={() => setDark(!dark)}
         signalCount={audienceCount}
       />
 
@@ -303,7 +304,7 @@ export default function ProducerDashboard() {
                   {primaryQuestions.length === 0 ? (
                     <p className={`text-sm text-center ${T.muted}`}>No questions from the primary judge yet.</p>
                   ) : primaryQuestions.map((q, i) => (
-                    <div key={q.id} className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/80'}`}>
+                    <div key={q.id} className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/90'}`}>
                       <div className="flex-1">
                         <span className={`text-[10px] uppercase tracking-widest mr-2 ${T.muted}`}>Q{i + 1}</span>
                         {q.text}
