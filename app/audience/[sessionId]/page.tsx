@@ -47,6 +47,8 @@ export default function AudiencePage() {
   const [qFeedback,      setQFeedback]      = useState<string | null>(null);
   const [qCooldownUntil, setQCooldownUntil] = useState(0);
   const [qCooldownLeft,  setQCooldownLeft]  = useState(0);
+  const [allQuestions,   setAllQuestions]   = useState<Array<{ id: string; text: string; upvotes: number; audienceId: string; ts: number }>>([]);
+  const [upvotedIds,     setUpvotedIds]     = useState<Set<string>>(new Set());
 
   // chat
   type ChatMsg = { role: 'user' | 'bot'; text: string; stale?: boolean };
@@ -158,6 +160,22 @@ export default function AudiencePage() {
     return () => clearInterval(id);
   }, [sessionId]);
 
+  // ── Poll all questions every 5s ─────────────────────────────────────────
+  useEffect(() => {
+    if (!sessionId) return;
+    let alive = true;
+    async function fetchQuestions() {
+      try {
+        const res = await fetch(`/api/questions?sessionId=${sessionId}`);
+        const json = await res.json().catch(() => []);
+        if (alive) setAllQuestions(Array.isArray(json) ? json : []);
+      } catch {}
+    }
+    fetchQuestions();
+    const id = setInterval(fetchQuestions, 5_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionId]);
+
   // ── Send signal — HTTP + SpacetimeDB reducer ─────────────────────────────
   async function sendSignal(key: SignalKey) {
     if (Date.now() < cooldownUntil || sending) return;
@@ -236,6 +254,22 @@ export default function AudiencePage() {
       setQSending(false);
       setTimeout(() => setQFeedback(null), 3000);
     }
+  }
+
+  // ── Upvote a question ────────────────────────────────────────────────────
+  async function upvoteQuestion(id: string) {
+    if (upvotedIds.has(id)) return;
+    try {
+      const res = await fetch('/api/questions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, audienceId: audienceId.current }),
+      });
+      if (res.ok) {
+        setUpvotedIds(prev => new Set([...prev, id]));
+        setAllQuestions(prev => prev.map(q => q.id === id ? { ...q, upvotes: q.upvotes + 1 } : q));
+      }
+    } catch {}
   }
 
   // ── Send chat message ────────────────────────────────────────────────────
@@ -431,6 +465,41 @@ export default function AudiencePage() {
             </button>
             {qFeedback && (
               <p className={`text-sm text-center ${T.feedback}`}>{qFeedback}</p>
+            )}
+
+            {/* Existing questions */}
+            {allQuestions.length > 0 && (
+              <div className="flex flex-col gap-2 mt-2">
+                <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>All questions</p>
+                {allQuestions.map(q => {
+                  const isOwn    = q.audienceId === audienceId.current;
+                  const upvoted  = upvotedIds.has(q.id);
+                  const canVote  = !isOwn && !upvoted;
+                  return (
+                    <div
+                      key={q.id}
+                      className={`flex items-start gap-3 px-4 py-3 rounded-2xl border text-sm ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-zinc-200 bg-white text-zinc-800'}`}
+                    >
+                      <span className="flex-1 leading-snug">{q.text}</span>
+                      <button
+                        onClick={() => canVote && upvoteQuestion(q.id)}
+                        disabled={!canVote}
+                        aria-label={upvoted ? 'Already upvoted' : isOwn ? 'Your question' : 'Upvote'}
+                        className={`flex flex-col items-center gap-0.5 shrink-0 transition-colors ${
+                          upvoted
+                            ? dark ? 'text-emerald-400' : 'text-emerald-600'
+                            : isOwn
+                            ? dark ? 'text-white/20' : 'text-zinc-300'
+                            : dark ? 'text-white/40 hover:text-white' : 'text-zinc-400 hover:text-zinc-900'
+                        } disabled:cursor-not-allowed`}
+                      >
+                        <span className="text-base leading-none">▲</span>
+                        <span className="text-[11px] font-medium tabular-nums">{q.upvotes}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}

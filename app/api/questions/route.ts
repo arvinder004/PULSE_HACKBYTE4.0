@@ -80,6 +80,26 @@ export async function GET(req: NextRequest) {
   );
 }
 
+// PATCH — upvote a question by id
+export async function PATCH(req: NextRequest) {
+  const body = await req.json().catch(() => null);
+  const { id, audienceId } = body ?? {};
+  if (!id || !audienceId) {
+    return NextResponse.json({ error: 'Provide id and audienceId' }, { status: 400 });
+  }
+  const q = questions.get(id);
+  if (!q) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  // Prevent self-upvote
+  if (q.audienceId === audienceId) {
+    return NextResponse.json({ error: 'Cannot upvote your own question' }, { status: 403 });
+  }
+
+  q.upvotes += 1;
+  questions.set(id, q);
+  return NextResponse.json({ ok: true, upvotes: q.upvotes });
+}
+
 // DELETE — remove a single question by id, or all questions for a session
 export async function DELETE(req: NextRequest) {
   const { searchParams } = new URL(req.url);

@@ -96,7 +96,7 @@ export default function ProducerDashboard() {
   const [audienceCount, setAudienceCount] = useState(0);
   const [audioFiles, setAudioFiles] = useState<Array<{ id: string; filename: string; ts?: string | null }>>([]);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
-  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; ts: number }>>([]);
+  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; upvotes: number; ts: number; isPrimary: boolean }>>([]);
   const reactionId = useRef(0);
   const DEBUG = true;
 
@@ -156,13 +156,13 @@ export default function ProducerDashboard() {
     return () => { alive = false; clearInterval(id); };
   }, [sessionId]);
 
-  // Poll primary questions every 5s
+  // Poll all questions every 5s
   useEffect(() => {
     if (!sessionId) return;
     let alive = true;
     async function fetchQuestions() {
       try {
-        const res = await fetch(`/api/questions?sessionId=${sessionId}&primaryOnly=1`);
+        const res = await fetch(`/api/questions?sessionId=${sessionId}`);
         const json = await res.json().catch(() => []);
         if (alive) setPrimaryQuestions(Array.isArray(json) ? json : []);
       } catch {}
@@ -302,11 +302,20 @@ export default function ProducerDashboard() {
               {tab === 'questions' && (
                 <div className="flex flex-col gap-3">
                   {primaryQuestions.length === 0 ? (
-                    <p className={`text-sm text-center ${T.muted}`}>No questions from the primary judge yet.</p>
+                    <p className={`text-sm text-center ${T.muted}`}>No questions yet.</p>
                   ) : primaryQuestions.map((q, i) => (
                     <div key={q.id} className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/90'}`}>
+                      <div className={`flex flex-col items-center gap-0.5 shrink-0 min-w-[2rem] ${dark ? 'text-white/50' : 'text-black/50'}`}>
+                        <span className="text-base leading-none">▲</span>
+                        <span className="text-sm font-semibold tabular-nums">{q.upvotes}</span>
+                      </div>
                       <div className="flex-1">
-                        <span className={`text-[10px] uppercase tracking-widest mr-2 ${T.muted}`}>Q{i + 1}</span>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-[10px] uppercase tracking-widest ${T.muted}`}>Q{i + 1}</span>
+                          {q.isPrimary && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 font-medium uppercase tracking-widest">Primary</span>
+                          )}
+                        </div>
                         {q.text}
                       </div>
                       <button
