@@ -121,7 +121,8 @@ export default function AudiencePage() {
 
   // ── ACTIVE: Live captions + signals via SSE ──────────────────────────────
   useEffect(() => {
-    if (!sessionId || sessionEnded) return;
+    // Wait until session is loaded AND confirmed active
+    if (!sessionId || !session || sessionEnded) return;
     console.log('[PULSE][Audience][SSE] connecting', sessionId);
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onopen  = () => console.log('[PULSE][Audience][SSE] connected');
@@ -151,11 +152,12 @@ export default function AudiencePage() {
       } catch { /* ignore */ }
     };
     return () => { es.close(); console.log('[PULSE][Audience][SSE] closed'); };
-  }, [sessionId, sessionEnded]);
+  }, [sessionId, session, sessionEnded]);
 
   // ── ACTIVE: Poll questions every 5s via API ───────────────────────────────
   useEffect(() => {
-    if (!sessionId || sessionEnded) return;
+    // Wait until session is loaded AND confirmed active before polling
+    if (!sessionId || !session || sessionEnded) return;
     let alive = true;
     async function fetchQuestions() {
       try {
@@ -169,7 +171,7 @@ export default function AudiencePage() {
     fetchQuestions();
     const id = setInterval(fetchQuestions, 5_000);
     return () => { alive = false; clearInterval(id); };
-  }, [sessionId, sessionEnded]);
+  }, [sessionId, session, sessionEnded]);
 
   // ── ENDED: single archive fetch, no intervals ─────────────────────────────
   useEffect(() => {
