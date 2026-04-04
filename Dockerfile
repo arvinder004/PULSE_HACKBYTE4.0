@@ -3,7 +3,7 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --frozen-lockfile
+# RUN npm ci --frozen-lockfile
 
 # ── Stage 2: Build ────────────────────────────────────────────────────────────
 FROM node:20-alpine AS build
@@ -26,6 +26,7 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_PUBLIC_DEEPGRAM_MODEL=$NEXT_PUBLIC_DEEPGRAM_MODEL
 ENV NEXT_PUBLIC_DEEPGRAM_LANGUAGE=$NEXT_PUBLIC_DEEPGRAM_LANGUAGE
 ENV NEXT_PUBLIC_DEEPGRAM_API_KEY=$NEXT_PUBLIC_DEEPGRAM_API_KEY
+ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 

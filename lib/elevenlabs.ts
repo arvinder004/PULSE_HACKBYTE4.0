@@ -49,7 +49,7 @@ export async function transcribeSpeech(audioBuffer: Buffer, contentType: string,
 
   const url = process.env.ELEVENLABS_STT_URL || 'https://api.elevenlabs.io/v1/speech-to-text';
   const form = new FormData();
-  const blob = new Blob([audioBuffer], { type: contentType || 'audio/webm' });
+  const blob = new Blob([audioBuffer.buffer.slice(audioBuffer.byteOffset, audioBuffer.byteOffset + audioBuffer.byteLength)], { type: contentType || 'audio/webm' });
   form.append('file', blob, filename);
 
   if (process.env.ELEVENLABS_STT_MODEL) {
