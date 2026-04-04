@@ -117,7 +117,7 @@ const rateLimitTable = table(
 
 // --- Schema ---
 
-export const spacetimedb = schema({
+const spacetimedb = schema({
   session: sessionTable,
   signal: signalTable,
   intervention: interventionTable,
@@ -129,6 +129,8 @@ export const spacetimedb = schema({
   poll_vote: pollVoteTable,
   rate_limit: rateLimitTable,
 });
+
+export default spacetimedb;
 
 // --- Reducers ---
 

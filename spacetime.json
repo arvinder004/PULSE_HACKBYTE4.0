@@ -1,4 +1,5 @@
 {
-  "module-path": "./spacetime",
-  "server": "maincloud"
+  "module_path": "./spacetime",
+  "server": "maincloud",
+  "database": "pulse"
 }
