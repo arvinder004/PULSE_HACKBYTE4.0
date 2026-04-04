@@ -8,6 +8,7 @@ const ALLOWED_ORIGINS = [
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  allowedDevOrigins: ['pulse.venoms.app'],
   experimental: {},
   async headers() {
     return [
