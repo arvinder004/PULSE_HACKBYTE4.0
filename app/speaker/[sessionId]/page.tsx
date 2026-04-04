@@ -455,58 +455,62 @@ export default function SpeakerView() {
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  // Periodic AI intervention check — every 8s, guarded by simple local checks
+  // Periodic AI intervention check — every 8s, signal-based only
   useEffect(() => {
     if (!sessionId || !sessionStarted || sessionEnded) return;
     const interval = setInterval(async () => {
       try {
-        // Guards: AI paused, cooldown, or intervention currently visible
         if (Date.now() < aiPausedUntilRef.current) return;
         if (Date.now() < cooldownUntilRef.current) return;
         if (aiMsgRef.current) return;
 
         const curCounts = countsRef.current;
         const roomState = getRoomState(curCounts);
-        if (roomState === 'good') return;
+        if (roomState === 'good') return; // only fire when signals indicate a problem
 
         const last60 = transcript.getLast60s();
         const confused = curCounts['confused'] ?? 0;
         const hasTranscript = !!last60 && last60.length >= 20;
         if (!hasTranscript && confused < 2) return;
 
+        console.log('[PULSE][Intervene] firing', { roomState, confused });
+
         const res = await fetch('/api/intervene', {
           method: 'POST',
-          body: JSON.stringify({
-            sessionId,
-            transcript: last60,
-            signals: curCounts,
-          }),
+          body: JSON.stringify({ sessionId, transcript: last60, signals: curCounts }),
           headers: { 'Content-Type': 'application/json' },
         });
 
         if (res.status === 429) {
           const d = await res.json().catch(() => ({} as any));
-          const retryAfterSec = typeof d?.retryAfter === 'number' ? d.retryAfter : 15;
-          cooldownUntilRef.current = Date.now() + retryAfterSec * 1000;
+          cooldownUntilRef.current = Date.now() + (d.retryAfter ?? 15) * 1000;
           return;
         }
         if (res.status === 409) {
-          // pending ack / ended — back off a bit
-          cooldownUntilRef.current = Date.now() + 15_000;
+          // pending ack — auto-ack the stale one so it doesn't block forever
+          const d = await res.json().catch(() => ({} as any));
+          if (d.interventionId) {
+            await fetch('/api/intervene/ack', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId, interventionId: d.interventionId }),
+            }).catch(() => {});
+            console.log('[PULSE][Intervene] auto-acked stale', d.interventionId);
+          }
+          cooldownUntilRef.current = Date.now() + 5_000;
           return;
         }
         if (res.ok) {
           const data = await res.json().catch(() => null) as any;
-          if (DEBUG) console.log('[PULSE][Phase3][Intervene] ok', data?.intervention?.id);
+          console.log('[PULSE][Intervene] ok', { id: data?.intervention?.id, urgency: data?.intervention?.urgency });
           cooldownUntilRef.current = Date.now() + 90_000;
         } else {
           cooldownUntilRef.current = Date.now() + 15_000;
         }
       } catch (e) {
-        // ignore
+        console.warn('[PULSE][Intervene] error', String(e));
       }
     }, 8_000);
-
     return () => { clearInterval(interval); };
   }, [sessionId, sessionStarted, sessionEnded, transcript]);
 
