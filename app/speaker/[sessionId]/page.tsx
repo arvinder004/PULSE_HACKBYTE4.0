@@ -217,7 +217,32 @@ export default function SpeakerView() {
       return diff !== 0 ? diff : b.upvotes - a.upvotes;
     });
 
-  const transcriptLive = transcript.listening;
+  // Suggestions panel — 60s improvement summaries from Suggester agent
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [liveSuggestions, setLiveSuggestions] = useState<Array<{
+    id: string; message: string; detail: string; urgency: string; category: string; createdAt: string;
+  }>>([]);
+
+  // Poll suggestions every 30s during active session
+  useEffect(() => {
+    if (!sessionId || !sessionStarted || sessionEnded) return;
+    let alive = true;
+    async function fetchSuggestions() {
+      try {
+        console.log('[PULSE][Speaker][Suggestions] fetching suggestions for', sessionId);
+        const res = await fetch(`/api/suggest?sessionId=${sessionId}`);
+        if (!res.ok) { console.warn('[PULSE][Speaker][Suggestions] fetch failed', res.status); return; }
+        const data = await res.json();
+        console.log('[PULSE][Speaker][Suggestions] got', data.suggestions?.length ?? 0, 'suggestions');
+        if (alive && Array.isArray(data.suggestions)) {
+          setLiveSuggestions(data.suggestions.slice(-10).reverse());
+        }
+      } catch (e) { console.error('[PULSE][Speaker][Suggestions] error', String(e)); }
+    }
+    fetchSuggestions();
+    const id = setInterval(fetchSuggestions, 30_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionId, sessionStarted, sessionEnded]);
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -279,7 +304,14 @@ export default function SpeakerView() {
       spacetime.reducers?.submitCaption?.(id, finalText);
       // Keep a local copy so expand history works regardless of SpacetimeDB subscription state
       setLocalCaptions(prev => [...prev.slice(-200), { id, text: finalText, ts: now }]);
-      if (DEBUG) console.log('[PULSE][Phase3][Caption] submit', finalText.slice(0, 80));
+      if (DEBUG) console.log('[PULSE][Phase3][Caption] submit to SpacetimeDB', finalText.slice(0, 80));
+
+      // Also broadcast via SSE so audience gets real-time captions without SpacetimeDB
+      fetch('/api/captions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, id, text: finalText }),
+      }).catch(e => { if (DEBUG) console.warn('[PULSE][Caption] SSE broadcast failed', String(e)); });
     } catch (e) {
       if (DEBUG) console.log('[PULSE][Phase3][Caption] submit failed', String(e));
     }
@@ -370,10 +402,14 @@ export default function SpeakerView() {
   // SSE — live signal counts + floating reactions
   useEffect(() => {
     if (!sessionId) return;
+    console.log('[PULSE][Speaker][SSE] connecting to SSE stream', sessionId);
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
+    es.onopen = () => console.log('[PULSE][Speaker][SSE] connected');
+    es.onerror = (e) => console.warn('[PULSE][Speaker][SSE] error', e);
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        console.log('[PULSE][Speaker][SSE] message type:', msg.type);
         if (msg.type === 'snapshot') {
           setCounts(prev => ({ ...prev, ...msg.counts }));
         } else if (msg.type === 'signal') {
@@ -387,9 +423,9 @@ export default function SpeakerView() {
             setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
           }
         } else if (msg.type === 'intervention') {
+          console.log('[PULSE][Speaker][SSE] intervention received', msg);
           setAiMsg(msg.message ?? null);
           setTimeout(() => setAiMsg(null), 8000);
-          if (DEBUG) console.log('[PULSE][Phase3][SSE] intervention', msg);
         }
       } catch { /* ignore */ }
     };
@@ -530,6 +566,7 @@ export default function SpeakerView() {
   const roomState = getRoomState(counts);
   const cfg       = ROOM_CONFIG[roomState];
   const total     = Object.values(counts).reduce((a, b) => a + b, 0);
+  const transcriptLive = transcript.listening;
 
   const bg = dark ? 'bg-black text-white' : 'bg-white text-black';
   const subText = dark ? 'text-white/30' : 'text-black/70';

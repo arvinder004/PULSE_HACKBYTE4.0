@@ -31,8 +31,12 @@ function normalizeSignalCounts(input: any): Record<string, number> {
 function broadcastIntervention(sessionId: string, payload: object) {
   const g = globalThis as any;
   const sseClients: Map<string, Set<ReadableStreamDefaultController>> = g.__pulse_sse_clients;
-  if (!sseClients) return;
+  if (!sseClients) {
+    console.warn('[PULSE][Intervene] __pulse_sse_clients not initialized');
+    return;
+  }
   const clients = sseClients.get(sessionId);
+  console.log(`[PULSE][Intervene] broadcasting to ${clients?.size ?? 0} SSE clients for session ${sessionId}`);
   if (!clients) return;
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
   for (const ctrl of clients) {

@@ -25,7 +25,8 @@ export default function AudiencePage() {
   const params    = useParams();
   const sessionId = params?.sessionId as string;
 
-  const [session,  setSession]  = useState<{ speakerName: string; topic: string } | null>(null);
+  const [session,  setSession]  = useState<{ speakerName: string; topic: string; active: boolean } | null>(null);
+  const [sessionEnded, setSessionEnded] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [tab,      setTab]      = useState<Tab>('react');
   const { dark, setDark } = useTheme(false);
@@ -47,7 +48,7 @@ export default function AudiencePage() {
   const [qFeedback,      setQFeedback]      = useState<string | null>(null);
   const [qCooldownUntil, setQCooldownUntil] = useState(0);
   const [qCooldownLeft,  setQCooldownLeft]  = useState(0);
-  const [allQuestions,   setAllQuestions]   = useState<Array<{ id: string; text: string; upvotes: number; mergedCount: number; audienceId: string; ts: number }>>([]);
+  const [allQuestions,   setAllQuestions]   = useState<Array<{ id: string; text: string; upvotes: number; audienceId: string; ts: number }>>([]);
   const [upvotedIds,     setUpvotedIds]     = useState<Set<string>>(new Set());
 
   // chat
@@ -63,8 +64,8 @@ export default function AudiencePage() {
   const fpRef       = useRef('');
   const [isPrimary, setIsPrimary] = useState(false);
 
-  // captions
-  const [captionHistory,     setCaptionHistory]     = useState<{ text: string; startTs: number }[]>([]);
+  // captions — subscribe to SpacetimeDB captions table for real-time updates
+  const [captionHistory,     setCaptionHistory]     = useState<{ id: string; text: string; ts: number }[]>([]);
   const [captionLive,        setCaptionLive]        = useState('');
   const captionBottomRef = useRef<HTMLDivElement>(null);
 
@@ -94,12 +95,17 @@ export default function AudiencePage() {
     }
   }, [sessionId]);
 
-  // ── Load session ─────────────────────────────────────────────────────────
+  // ── Load session (includes active flag) ─────────────────────────────────
   useEffect(() => {
     if (!sessionId) return;
     fetch(`/api/session?sessionId=${sessionId}`)
       .then(r => { if (r.status === 404) { setNotFound(true); return null; } return r.json(); })
-      .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
+      .then(d => {
+        if (!d) return;
+        setSession({ speakerName: d.speakerName, topic: d.topic, active: d.active });
+        if (d.active === false) setSessionEnded(true);
+        console.log('[PULSE][Audience] session loaded', { active: d.active });
+      });
   }, [sessionId]);
 
   // ── Cooldown ticker ──────────────────────────────────────────────────────
@@ -113,10 +119,13 @@ export default function AudiencePage() {
     return () => clearInterval(id);
   }, [cooldownUntil, qCooldownUntil, chatCooldownUntil]);
 
-  // ── SSE — floating reactions from all audience members ───────────────────
+  // ── ACTIVE: Live captions + signals via SSE ──────────────────────────────
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || sessionEnded) return;
+    console.log('[PULSE][Audience][SSE] connecting', sessionId);
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
+    es.onopen  = () => console.log('[PULSE][Audience][SSE] connected');
+    es.onerror = () => console.warn('[PULSE][Audience][SSE] error');
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
@@ -127,58 +136,68 @@ export default function AudiencePage() {
           const x  = 10 + Math.random() * 80;
           setReactions(prev => [...prev.slice(-20), { id, emoji, x }]);
           setTimeout(() => setReactions(prev => prev.filter(r => r.id !== id)), 2200);
+        } else if (msg.type === 'caption') {
+          console.log('[PULSE][Audience][Caption] received', msg.text?.slice(0, 60));
+          const entry = { id: msg.id ?? String(Date.now()), text: msg.text, ts: msg.ts ?? Date.now() };
+          setCaptionLive(msg.text);
+          setCaptionHistory(prev => {
+            if (prev.find(c => c.id === entry.id)) return prev;
+            return [...prev.slice(-100), entry];
+          });
+        } else if (msg.type === 'session_end') {
+          console.log('[PULSE][Audience][SSE] session ended');
+          setSessionEnded(true);
         }
       } catch { /* ignore */ }
     };
-    return () => es.close();
-  }, [sessionId]);
+    return () => { es.close(); console.log('[PULSE][Audience][SSE] closed'); };
+  }, [sessionId, sessionEnded]);
 
-  // ── Poll captions from transcript API every 3s ───────────────────────────
+  // ── ACTIVE: Poll questions every 5s via API ───────────────────────────────
   useEffect(() => {
-    if (!sessionId) return;
-    const poll = async () => {
-      try {
-        const res = await fetch(`/api/transcript?sessionId=${sessionId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.chunks?.length) {
-          setCaptionHistory(
-            data.chunks
-              .filter((c: any) => c.text || c.preview)
-              .map((c: any) => ({ text: c.text || c.preview, startTs: c.startTs }))
-          );
-          const last = data.chunks[data.chunks.length - 1];
-          setCaptionLive(last?.text || last?.preview || '');
-        } else if (data.fullText) {
-          setCaptionHistory([{ text: data.fullText, startTs: 0 }]);
-          setCaptionLive(data.fullText);
-        }
-      } catch {}
-    };
-    poll();
-    const id = setInterval(poll, 3_000);
-    return () => clearInterval(id);
-  }, [sessionId]);
-
-  // ── Poll all questions every 5s ─────────────────────────────────────────
-  useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || sessionEnded) return;
     let alive = true;
     async function fetchQuestions() {
       try {
+        console.log('[PULSE][Audience][Questions] polling');
         const res = await fetch(`/api/questions?sessionId=${sessionId}`);
         const json = await res.json().catch(() => []);
+        console.log('[PULSE][Audience][Questions] got', Array.isArray(json) ? json.length : 0);
         if (alive) setAllQuestions(Array.isArray(json) ? json : []);
-      } catch {}
+      } catch (e) { console.warn('[PULSE][Audience][Questions] poll error', String(e)); }
     }
     fetchQuestions();
     const id = setInterval(fetchQuestions, 5_000);
     return () => { alive = false; clearInterval(id); };
-  }, [sessionId]);
+  }, [sessionId, sessionEnded]);
 
-  // ── Send signal — HTTP + SpacetimeDB reducer ─────────────────────────────
+  // ── ENDED: single archive fetch, no intervals ─────────────────────────────
+  useEffect(() => {
+    if (!sessionId || !sessionEnded) return;
+    console.log('[PULSE][Audience] session ended — fetching archive');
+    fetch(`/api/session/archive?sessionId=${sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        console.log('[PULSE][Audience] archive loaded', {
+          questions: data.questions?.length,
+          signals: Object.keys(data.signalCounts ?? {}).length,
+        });
+        setAllQuestions(
+          (data.questions ?? []).map((q: any) => ({
+            id:        q.id,
+            text:      q.text,
+            upvotes:   q.upvotes ?? 0,
+            audienceId: q.audienceId ?? '',
+            ts:        new Date(q.createdAt).getTime(),
+          }))
+        );
+      });
+  }, [sessionId, sessionEnded]);
+
+  // ── Send signal — disabled when session ended ────────────────────────────
   async function sendSignal(key: SignalKey) {
-    if (Date.now() < cooldownUntil || sending) return;
+    if (sessionEnded || Date.now() < cooldownUntil || sending) return;
     setSending(true);
     setLastSignal(key);
 
@@ -229,10 +248,10 @@ export default function AudiencePage() {
     }
   }
 
-  // ── Send question ────────────────────────────────────────────────────────
+  // ── Send question — disabled when session ended ──────────────────────────
   async function sendQuestion() {
     const text = question.trim();
-    if (!text || qSending || Date.now() < qCooldownUntil) return;
+    if (sessionEnded || !text || qSending || Date.now() < qCooldownUntil) return;
     setQSending(true);
     try {
       const res = await fetch('/api/questions', {
@@ -261,9 +280,9 @@ export default function AudiencePage() {
     }
   }
 
-  // ── Upvote a question ────────────────────────────────────────────────────
+  // ── Upvote a question — disabled when session ended ──────────────────────
   async function upvoteQuestion(id: string) {
-    if (upvotedIds.has(id)) return;
+    if (sessionEnded || upvotedIds.has(id)) return;
     try {
       const res = await fetch('/api/questions', {
         method: 'PATCH',
@@ -375,6 +394,11 @@ export default function AudiencePage() {
               ★ Primary judge
             </span>
           )}
+          {sessionEnded && (
+            <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full border border-red-400/50 text-red-400 text-[10px] font-medium uppercase tracking-widest">
+              Session ended
+            </span>
+          )}
         </div>
         <button
           onClick={() => setDark(!dark)}
@@ -389,18 +413,18 @@ export default function AudiencePage() {
       <div className={`px-4 py-3 border-b ${T.captionPanel}`}>
         <div className="flex items-center justify-between mb-1">
           <span className={`text-[11px] uppercase tracking-widest font-medium ${T.captionMuted}`}>Live captions</span>
-          <span className={`text-[10px] ${T.captionMuted}`}>updates every 3s</span>
+          <span className={`text-[10px] ${T.captionMuted}`}>{sessionEnded ? 'ended' : 'live'}</span>
         </div>
-        <div className="text-sm min-h-[1.25rem]">
+        <div className="text-sm min-h-5">
           {captionLive || <span className={T.captionMuted}>Waiting for speaker…</span>}
         </div>
         {captionHistory.length > 1 && (
           <div className={`mt-2 max-h-24 overflow-y-auto text-xs ${T.captionMuted}`}>
-            {captionHistory.slice(0, -1).map((seg, i) => (
-              <div key={i} className={`py-0.5 border-b last:border-b-0 ${T.captionRow}`}>
-                {seg.startTs > 0 && (
+            {captionHistory.slice(0, -1).map((seg) => (
+              <div key={seg.id} className={`py-0.5 border-b last:border-b-0 ${T.captionRow}`}>
+                {seg.ts > 0 && (
                   <span className="opacity-60 mr-2">
-                    {new Date(seg.startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(seg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 )}
                 <span>{seg.text}</span>
@@ -431,55 +455,67 @@ export default function AudiencePage() {
 
         {tab === 'react' && (
           <div className="flex flex-col gap-4">
-            <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>How's it going?</p>
-            <SignalButtons
-              onSignal={sendSignal}
-              lastSignal={lastSignal}
-              cooldownLeft={cooldownLeft}
-              sending={sending}
-            />
-            {feedback && (
-              <p className={`text-sm text-center ${T.feedback}`}>{feedback}</p>
+            {sessionEnded ? (
+              <p className={`text-sm text-center mt-4 ${T.feedback}`}>Session has ended. Reactions are disabled.</p>
+            ) : (
+              <>
+                <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>How's it going?</p>
+                <SignalButtons
+                  onSignal={sendSignal}
+                  lastSignal={lastSignal}
+                  cooldownLeft={cooldownLeft}
+                  sending={sending}
+                />
+                {feedback && (
+                  <p className={`text-sm text-center ${T.feedback}`}>{feedback}</p>
+                )}
+              </>
             )}
           </div>
         )}
 
         {tab === 'ask' && (
           <div className="flex flex-col gap-4">
-            <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>Ask a question</p>
-            <textarea
-              value={question}
-              onChange={e => setQuestion(e.target.value.slice(0, 200))}
-              disabled={qCooldownLeft > 0}
-              placeholder="What's on your mind?"
-              rows={4}
-              className={`w-full rounded-2xl border px-4 py-3 text-sm resize-none outline-none focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${T.textarea}`}
-            />
-            <div className="flex items-center justify-between">
-              <span className={`text-xs ${T.charCount}`}>{question.length}/200</span>
-              {qCooldownLeft > 0 && (
-                <span className={`text-xs ${T.charCount}`}>Wait {qCooldownLeft}s</span>
-              )}
-            </div>
-            <button
-              onClick={sendQuestion}
-              disabled={!question.trim() || qSending || qCooldownLeft > 0}
-              className={`w-full py-3 rounded-full text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${T.submitBtn}`}
-            >
-              {qSending ? 'Submitting…' : 'Submit question'}
-            </button>
-            {qFeedback && (
-              <p className={`text-sm text-center ${T.feedback}`}>{qFeedback}</p>
+            <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>
+              {sessionEnded ? 'Questions from this session' : 'Ask a question'}
+            </p>
+            {!sessionEnded && (
+              <>
+                <textarea
+                  value={question}
+                  onChange={e => setQuestion(e.target.value.slice(0, 200))}
+                  disabled={qCooldownLeft > 0}
+                  placeholder="What's on your mind?"
+                  rows={4}
+                  className={`w-full rounded-2xl border px-4 py-3 text-sm resize-none outline-none focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${T.textarea}`}
+                />
+                <div className="flex items-center justify-between">
+                  <span className={`text-xs ${T.charCount}`}>{question.length}/200</span>
+                  {qCooldownLeft > 0 && (
+                    <span className={`text-xs ${T.charCount}`}>Wait {qCooldownLeft}s</span>
+                  )}
+                </div>
+                <button
+                  onClick={sendQuestion}
+                  disabled={!question.trim() || qSending || qCooldownLeft > 0}
+                  className={`w-full py-3 rounded-full text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${T.submitBtn}`}
+                >
+                  {qSending ? 'Submitting…' : 'Submit question'}
+                </button>
+                {qFeedback && (
+                  <p className={`text-sm text-center ${T.feedback}`}>{qFeedback}</p>
+                )}
+              </>
             )}
 
-            {/* Existing questions */}
+            {/* Questions list */}
             {allQuestions.length > 0 && (
               <div className="flex flex-col gap-2 mt-2">
-                <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>All questions</p>
+                {!sessionEnded && <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>All questions</p>}
                 {allQuestions.map(q => {
-                  const isOwn    = q.audienceId === audienceId.current;
-                  const upvoted  = upvotedIds.has(q.id);
-                  const canVote  = !isOwn && !upvoted;
+                  const isOwn   = q.audienceId === audienceId.current;
+                  const upvoted = upvotedIds.has(q.id);
+                  const canVote = !sessionEnded && !isOwn && !upvoted;
                   return (
                     <div
                       key={q.id}
@@ -489,22 +525,25 @@ export default function AudiencePage() {
                       <button
                         onClick={() => canVote && upvoteQuestion(q.id)}
                         disabled={!canVote}
-                        aria-label={upvoted ? 'Already upvoted' : isOwn ? 'Your question' : 'Upvote'}
+                        aria-label={upvoted ? 'Already upvoted' : isOwn ? 'Your question' : sessionEnded ? 'Session ended' : 'Upvote'}
                         className={`flex flex-col items-center gap-0.5 shrink-0 transition-colors ${
                           upvoted
                             ? dark ? 'text-emerald-400' : 'text-emerald-600'
-                            : isOwn
+                            : isOwn || sessionEnded
                             ? dark ? 'text-white/20' : 'text-zinc-300'
                             : dark ? 'text-white/40 hover:text-white' : 'text-zinc-400 hover:text-zinc-900'
                         } disabled:cursor-not-allowed`}
                       >
                         <span className="text-base leading-none">▲</span>
-                        <span className="text-[11px] font-medium tabular-nums">{q.upvotes + (q.mergedCount ?? 0)}</span>
+                        <span className="text-[11px] font-medium tabular-nums">{q.upvotes}</span>
                       </button>
                     </div>
                   );
                 })}
               </div>
+            )}
+            {allQuestions.length === 0 && sessionEnded && (
+              <p className={`text-sm text-center mt-4 ${T.feedback}`}>No questions were submitted.</p>
             )}
           </div>
         )}
@@ -562,7 +601,7 @@ export default function AudiencePage() {
             </div>
           </div>
         )}
-        {tab === 'captions' && null}
+
       </div>
     </div>
   );
