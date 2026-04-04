@@ -96,7 +96,7 @@ export default function ProducerDashboard() {
   const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [audienceCount, setAudienceCount] = useState(0);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
-  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; ts: number }>>([]);
+  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; ts: number; upvotes?: number; category?: string; urgency?: string; themeTag?: string }>>([]);
   const [mood, setMood] = useState<string | null>(null);
   const [engagementBars, setEngagementBars] = useState<Array<{ wordCount: number }> | null>(null);
   const [coachReport, setCoachReport] = useState<{
@@ -133,7 +133,7 @@ export default function ProducerDashboard() {
         setCounts(data.signalCounts ?? {});
         setAudienceCount(Object.values(data.signalCounts ?? {}).reduce((a: number, b) => a + (b as number), 0));
         setPrimaryQuestions(
-          (data.questions ?? []).map((q: any) => ({ id: q.id, text: q.text, ts: new Date(q.createdAt).getTime() }))
+          (data.questions ?? []).map((q: any) => ({ id: q.id, text: q.text, ts: new Date(q.createdAt).getTime(), upvotes: q.upvotes ?? 0, category: q.category, urgency: q.urgency, themeTag: q.themeTag }))
         );
         setMood(data.mood ?? null);
         setEngagementBars(data.engagementBars ?? null);
@@ -363,20 +363,25 @@ export default function ProducerDashboard() {
                     <p className={`text-sm text-center ${T.muted}`}>No questions yet.</p>
                   ) : primaryQuestions.map((q, i) => (
                     <div key={q.id} className={`p-4 rounded-xl border text-sm flex items-start gap-3 ${dark ? 'border-white/10 bg-white/5 text-white/80' : 'border-black/10 bg-black/3 text-black/90'}`}>
-                      <div className={`flex flex-col items-center gap-0.5 shrink-0 min-w-[2rem] ${dark ? 'text-white/50' : 'text-black/50'}`}>
+                      <div className={`flex flex-col items-center gap-0.5 shrink-0 min-w-8 ${dark ? 'text-white/50' : 'text-black/50'}`}>
                         <span className="text-base leading-none">▲</span>
-                        <span className="text-sm font-semibold tabular-nums">{q.upvotes + (q.mergedCount ?? 0)}</span>
+                        <span className="text-sm font-semibold tabular-nums">{q.upvotes ?? 0}</span>
                       </div>
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <span className={`text-[10px] uppercase tracking-widest ${T.muted}`}>Q{i + 1}</span>
-                          {q.isPrimary && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 font-medium uppercase tracking-widest">Primary</span>
+                          {q.urgency && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-widest ${
+                              q.urgency === 'high'   ? 'bg-red-500/15 text-red-400' :
+                              q.urgency === 'medium' ? 'bg-amber-400/15 text-amber-400' :
+                                                       dark ? 'bg-white/10 text-white/40' : 'bg-black/8 text-black/50'
+                            }`}>{q.urgency}</span>
                           )}
-                          {(q.mergedCount ?? 0) > 0 && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${dark ? 'bg-white/10 text-white/40' : 'bg-black/8 text-black/50'}`}>
-                              +{q.mergedCount} similar
-                            </span>
+                          {q.category && q.category !== 'general' && (
+                            <span className={`text-[10px] ${T.muted}`}>{q.category}</span>
+                          )}
+                          {q.themeTag && (
+                            <span className={`text-[10px] ${T.muted}`}>#{q.themeTag}</span>
                           )}
                         </div>
                         {q.text}

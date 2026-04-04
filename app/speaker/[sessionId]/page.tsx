@@ -78,9 +78,6 @@ export default function SpeakerView() {
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachReport, setCoachReport] = useState<any | null>(null);
   const [coachError, setCoachError] = useState<string | null>(null);
-  // Questions panel
-  const [showQuestions, setShowQuestions] = useState(false);
-  const [speakerQuestions, setSpeakerQuestions] = useState<Array<{ id: string; text: string; upvotes: number; mergedCount: number; priority: 'high' | 'medium' | 'low' }>>([]);
   const DEBUG = true;
 
   const countsRef = useRef(counts);
@@ -97,6 +94,111 @@ export default function SpeakerView() {
   // Local rolling buffer — persists across SpacetimeDB reconnects
   const [localCaptions, setLocalCaptions] = useState<{ id: string; text: string; ts: number }[]>([]);
   const localCaptionsRef = useRef<{ id: string; text: string; ts: number }[]>([]);
+
+  // Questions panel — realtime via SpacetimeDB, classification from MongoDB
+  const [showQuestions, setShowQuestions] = useState(false);
+  const [questionMeta, setQuestionMeta] = useState<Record<string, {
+    category: string; urgency: 'high' | 'medium' | 'low'; themeTag: string; reason: string;
+  }>>({});
+  const questionTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  // Auto-dismiss timers per urgency (mirrors SuggestionCard logic)
+  const AUTO_DISMISS_Q: Record<string, number> = { high: Infinity, medium: 120_000, low: 45_000 };
+
+  // Fetch classification metadata once from MongoDB (non-realtime, just enrichment)
+  useEffect(() => {
+    if (!sessionId) return;
+    fetch(`/api/session?sessionId=${sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(async () => {
+        // Pull full session doc for question classifications
+        const res = await fetch(`/api/session/archive?sessionId=${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const meta: typeof questionMeta = {};
+        for (const q of data.questions ?? []) {
+          if (q.category) {
+            meta[q.id] = {
+              category: q.category,
+              urgency:  (q.urgency === 'high' ? 'high' : q.urgency === 'medium' ? 'medium' : 'low') as 'high' | 'medium' | 'low',
+              themeTag: q.themeTag ?? '',
+              reason:   q.classificationReason ?? '',
+            };
+          }
+        }
+        setQuestionMeta(meta);
+      });
+  }, [sessionId]);
+
+  // Re-fetch classification whenever a new question arrives (SpacetimeDB fires)
+  const prevQuestionCount = useRef(0);
+  useEffect(() => {
+    const qs = spacetime.questions || [];
+    if (qs.length > prevQuestionCount.current) {
+      prevQuestionCount.current = qs.length;
+      // Small delay to let Agent 3 finish classifying
+      setTimeout(() => {
+        fetch(`/api/session/archive?sessionId=${sessionId}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!data) return;
+            setQuestionMeta(prev => {
+              const next = { ...prev };
+              for (const q of data.questions ?? []) {
+                if (q.category) {
+                  next[q.id] = {
+                    category: q.category,
+                    urgency:  (q.urgency === 'high' ? 'high' : q.urgency === 'medium' ? 'medium' : 'low') as 'high' | 'medium' | 'low',
+                    themeTag: q.themeTag ?? '',
+                    reason:   q.classificationReason ?? '',
+                  };
+                }
+              }
+              return next;
+            });
+          });
+      }, 3000);
+    }
+  }, [sessionId, spacetime.questions]);
+
+  // Auto-dismiss timers — set when a question first appears
+  const [dismissedQIds, setDismissedQIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    for (const q of spacetime.questions ?? []) {
+      if (questionTimers.current.has(q.id)) continue;
+      const meta = questionMeta[q.id];
+      const urgency = meta?.urgency ?? 'low';
+      const delay = AUTO_DISMISS_Q[urgency];
+      if (!isFinite(delay)) continue; // high — manual only
+      const t = setTimeout(() => {
+        setDismissedQIds(prev => new Set([...prev, q.id]));
+        questionTimers.current.delete(q.id);
+      }, delay);
+      questionTimers.current.set(q.id, t);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spacetime.questions, questionMeta]);
+
+  // Derive display list: SpacetimeDB rows + classification + filter dismissed
+  const speakerQuestions = (spacetime.questions ?? [])
+    .filter((q: any) => !dismissedQIds.has(q.id))
+    .map((q: any) => {
+      const meta = questionMeta[q.id];
+      return {
+        id:       q.id,
+        text:     q.text,
+        upvotes:  Number(q.upvotes ?? 0),
+        urgency:  (meta?.urgency ?? 'low') as 'high' | 'medium' | 'low',
+        category: meta?.category ?? 'general',
+        themeTag: meta?.themeTag ?? '',
+        answered: q.answered,
+      };
+    })
+    .sort((a, b) => {
+      const ORDER: Record<'high' | 'medium' | 'low', number> = { high: 0, medium: 1, low: 2 };
+      const diff = ORDER[a.urgency] - ORDER[b.urgency];
+      return diff !== 0 ? diff : b.upvotes - a.upvotes;
+    });
 
   const transcriptLive = transcript.listening;
 
@@ -406,20 +508,7 @@ export default function SpeakerView() {
     compileReport();
   }, [sessionEnded, sessionId]);
 
-  useEffect(() => {
-    if (!sessionId || !showQuestions) return;
-    let alive = true;
-    async function fetchQ() {
-      try {
-        const res = await fetch(`/api/questions?sessionId=${sessionId}`);
-        const json = await res.json().catch(() => []);
-        if (alive) setSpeakerQuestions(Array.isArray(json) ? json : []);
-      } catch {}
-    }
-    fetchQ();
-    const id = setInterval(fetchQ, 5_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [sessionId, showQuestions]);
+
 
   const roomState = getRoomState(counts);
   const cfg       = ROOM_CONFIG[roomState];
@@ -796,35 +885,69 @@ export default function SpeakerView() {
               <p className={`text-sm text-center mt-8 ${dark ? 'text-white/30' : 'text-black/40'}`}>No questions yet.</p>
             )}
             {speakerQuestions.map((q, i) => {
-              const PRIORITY_STYLES = {
+              const URGENCY_STYLES = {
                 high:   { bar: 'bg-red-500',    badge: 'bg-red-500/15 text-red-400',    card: dark ? 'border-red-500/30 bg-red-500/8'    : 'border-red-300 bg-red-50'    },
                 medium: { bar: 'bg-amber-400',  badge: 'bg-amber-400/15 text-amber-400', card: dark ? 'border-amber-400/30 bg-amber-400/8' : 'border-amber-200 bg-amber-50' },
                 low:    { bar: 'bg-blue-400',   badge: 'bg-blue-400/15 text-blue-400',  card: dark ? 'border-blue-400/20 bg-blue-400/5'  : 'border-blue-200 bg-blue-50'  },
               };
-              const s = PRIORITY_STYLES[q.priority];
-              const totalVotes = q.upvotes + q.mergedCount;
+              const s = URGENCY_STYLES[q.urgency];
               return (
                 <div key={q.id} className={`relative rounded-2xl border px-4 py-3 text-sm overflow-hidden ${s.card}`}>
-                  {/* Priority color bar */}
                   <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl ${s.bar}`} />
                   <div className="flex items-start gap-3 pl-2">
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1.5">
+                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                         <span className={`text-[10px] uppercase tracking-widest font-semibold px-1.5 py-0.5 rounded-full ${s.badge}`}>
-                          {q.priority}
+                          {q.urgency}
                         </span>
+                        {q.category !== 'general' && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${dark ? 'bg-white/8 text-white/40' : 'bg-black/6 text-black/50'}`}>
+                            {q.category}
+                          </span>
+                        )}
+                        {q.themeTag && (
+                          <span className={`text-[10px] ${dark ? 'text-white/25' : 'text-black/35'}`}>#{q.themeTag}</span>
+                        )}
                         <span className={`text-[10px] ${dark ? 'text-white/30' : 'text-black/40'}`}>Q{i + 1}</span>
                       </div>
                       <p className={`leading-snug ${dark ? 'text-white/85' : 'text-black/90'}`}>{q.text}</p>
+                      {q.urgency !== 'high' && (
+                        <p className={`text-[10px] mt-1 ${dark ? 'text-white/20' : 'text-black/30'}`}>
+                          Auto-removes in {q.urgency === 'medium' ? '2 min' : '45 s'}
+                        </p>
+                      )}
                     </div>
-                    <div className={`flex flex-col items-center gap-0.5 shrink-0 ${dark ? 'text-white/40' : 'text-black/40'}`}>
-                      <span className="text-base leading-none">▲</span>
-                      <span className="text-xs font-semibold tabular-nums">{totalVotes}</span>
+                    <div className="flex flex-col items-center gap-2 shrink-0">
+                      <div className={`flex flex-col items-center gap-0.5 ${dark ? 'text-white/40' : 'text-black/40'}`}>
+                        <span className="text-base leading-none">▲</span>
+                        <span className="text-xs font-semibold tabular-nums">{q.upvotes}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          spacetime.reducers?.answerQuestion?.(q.id);
+                          setDismissedQIds(prev => new Set([...prev, q.id]));
+                          const t = questionTimers.current.get(q.id);
+                          if (t) { clearTimeout(t); questionTimers.current.delete(q.id); }
+                        }}
+                        className={`text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded transition-colors ${dark ? 'text-white/30 hover:text-emerald-400' : 'text-black/30 hover:text-emerald-600'}`}
+                        title="Mark answered"
+                      >
+                        ✓
+                      </button>
+                      <button
+                        onClick={() => {
+                          spacetime.reducers?.dismissQuestion?.(q.id);
+                          setDismissedQIds(prev => new Set([...prev, q.id]));
+                          const t = questionTimers.current.get(q.id);
+                          if (t) { clearTimeout(t); questionTimers.current.delete(q.id); }
+                        }}
+                        className={`text-[10px] transition-colors ${dark ? 'text-white/20 hover:text-red-400' : 'text-black/20 hover:text-red-500'}`}
+                        title="Dismiss"
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
-                  {q.mergedCount > 0 && (
-                    <p className={`text-[10px] mt-1.5 pl-2 ${dark ? 'text-white/25' : 'text-black/35'}`}>+{q.mergedCount} similar question{q.mergedCount > 1 ? 's' : ''}</p>
-                  )}
                 </div>
               );
             })}
