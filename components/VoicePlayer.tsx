@@ -42,7 +42,7 @@ export default function VoicePlayer({ text, audioBase64 = null, audioContentType
 
     async function run() {
       try {
-        if (DEBUG) console.log('[PULSE][Phase3][Voice] request TTS', text.slice(0, 80));
+        if (DEBUG) console.log('[PULSE][Phase3][Voice] request TTS', text!.slice(0, 80));
         const res = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

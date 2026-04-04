@@ -7,7 +7,10 @@
     "webpack": "next dev --webpack -p 3001",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run"
+    "test": "vitest run",
+    "stdb:publish": "spacetime publish --module-path ./spacetime",
+    "stdb:generate": "spacetime generate --lang typescript --out-dir ./src/module_bindings --module-path ./spacetime",
+    "stdb:logs": "spacetime logs"
   },
   "dependencies": {
     "@clockworklabs/spacetimedb-sdk": "^1.3.3",
