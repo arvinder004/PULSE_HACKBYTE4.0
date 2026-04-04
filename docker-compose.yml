@@ -3,29 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_SPACETIMEDB_URL: ${NEXT_PUBLIC_SPACETIMEDB_URL}
-        NEXT_PUBLIC_SPACETIMEDB_MODULE: ${NEXT_PUBLIC_SPACETIMEDB_MODULE}
-        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
-        NEXT_PUBLIC_DEEPGRAM_MODEL: ${NEXT_PUBLIC_DEEPGRAM_MODEL}
-        NEXT_PUBLIC_DEEPGRAM_LANGUAGE: ${NEXT_PUBLIC_DEEPGRAM_LANGUAGE}
-        NEXT_PUBLIC_DEEPGRAM_API_KEY: ${NEXT_PUBLIC_DEEPGRAM_API_KEY}
     ports:
       - "3001:3001"
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 3001
-      # Server-side secrets — read from .env at runtime, never baked into image
-      MONGODB_URI: ${MONGODB_URI}
-      JWT_SECRET: ${JWT_SECRET}
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL}
-      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
-      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID}
-      ARMORIQ_API_KEY: ${ARMORIQ_API_KEY}
-      USER_ID: ${USER_ID}
-      AGENT_ID: ${AGENT_ID}
-      SUGGEST_AGENT_SECRET: ${SUGGEST_AGENT_SECRET}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/session?sessionId=healthcheck"]
