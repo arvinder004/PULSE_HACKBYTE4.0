@@ -8,6 +8,7 @@ interface DashboardNavProps {
   dark: boolean;
   onToggleDark: () => void;
   signalCount?: number;
+  transcriptLive?: boolean;
   // Optional speaker controls
   micSupported?: boolean;
   micEnabled?: boolean;
@@ -25,6 +26,7 @@ export default function DashboardNav({
   dark,
   onToggleDark,
   signalCount = 0,
+  transcriptLive = false,
   micSupported = true,
   micEnabled = false,
   onToggleMic,
@@ -51,6 +53,16 @@ export default function DashboardNav({
       </div>
 
       <div className="flex items-center gap-2">
+        {/* Transcript live indicator */}
+        {mode === 'speaker' && (
+          <span className="flex items-center gap-1.5 px-3 py-1 text-xs border rounded-full border-transparent">
+            <span className={`w-1.5 h-1.5 rounded-full ${transcriptLive ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'}`} />
+            <span className={transcriptLive ? 'text-emerald-400' : (dark ? 'text-white/20' : 'text-black/20')}>
+              {transcriptLive ? 'Transcript live' : 'Transcript off'}
+            </span>
+          </span>
+        )}
+
         {/* Signal count */}
         <span className={`px-3 py-1 text-xs border rounded-full ${t.tagBorder}`}>
           {signalCount > 0 ? `${signalCount} signals` : '0 signals'}

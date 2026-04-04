@@ -8,7 +8,7 @@ import FloatingReactions, { type FloatingReaction } from '@/components/FloatingR
 
 export const dynamic = 'force-dynamic';
 
-type Tab = 'react' | 'ask';
+type Tab = 'react' | 'ask' | 'chat';
 
 const SIGNAL_EMOJI: Record<SignalKey, string> = {
   confused:  '😕',
@@ -27,6 +27,7 @@ export default function AudiencePage() {
   const [session,  setSession]  = useState<{ speakerName: string; topic: string } | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [tab,      setTab]      = useState<Tab>('react');
+  const [dark,     setDark]     = useState(false);
 
   // signals
   const [lastSignal,    setLastSignal]    = useState<SignalKey | null>(null);
@@ -45,6 +46,15 @@ export default function AudiencePage() {
   const [qFeedback,      setQFeedback]      = useState<string | null>(null);
   const [qCooldownUntil, setQCooldownUntil] = useState(0);
   const [qCooldownLeft,  setQCooldownLeft]  = useState(0);
+
+  // chat
+  type ChatMsg = { role: 'user' | 'bot'; text: string; stale?: boolean };
+  const [chatInput,       setChatInput]       = useState('');
+  const [chatMessages,    setChatMessages]    = useState<ChatMsg[]>([]);
+  const [chatSending,     setChatSending]     = useState(false);
+  const [chatCooldownUntil, setChatCooldownUntil] = useState(0);
+  const [chatCooldownLeft,  setChatCooldownLeft]  = useState(0);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
 
   const audienceId  = useRef('');
   const fpRef       = useRef('');
@@ -74,9 +84,10 @@ export default function AudiencePage() {
       const now = Date.now();
       setCooldownLeft(Math.max(0, Math.ceil((cooldownUntil - now) / 1000)));
       setQCooldownLeft(Math.max(0, Math.ceil((qCooldownUntil - now) / 1000)));
+      setChatCooldownLeft(Math.max(0, Math.ceil((chatCooldownUntil - now) / 1000)));
     }, 250);
     return () => clearInterval(id);
-  }, [cooldownUntil, qCooldownUntil]);
+  }, [cooldownUntil, qCooldownUntil, chatCooldownUntil]);
 
   // ── SSE — floating reactions from all audience members ───────────────────
   useEffect(() => {
@@ -178,46 +189,112 @@ export default function AudiencePage() {
     }
   }
 
+  // ── Send chat message ────────────────────────────────────────────────────
+  async function sendChat() {
+    const text = chatInput.trim();
+    if (!text || chatSending || chatCooldownLeft > 0) return;
+    setChatInput('');
+    setChatSending(true);
+    setChatMessages(prev => [...prev, { role: 'user', text }]);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, question: text, audienceId: audienceId.current }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (res.ok) {
+        setChatMessages(prev => [...prev, {
+          role: 'bot',
+          text: data.answer,
+          stale: data.transcriptAge != null && data.transcriptAge > 60,
+        }]);
+        setChatCooldownUntil(Date.now() + 5_000);
+      } else if (res.status === 429) {
+        setChatMessages(prev => [...prev, { role: 'bot', text: `Please wait ${data.retryAfter ?? '?'}s before asking again.` }]);
+      } else {
+        setChatMessages(prev => [...prev, { role: 'bot', text: data.error ?? 'Something went wrong.' }]);
+      }
+    } catch {
+      setChatMessages(prev => [...prev, { role: 'bot', text: 'Failed to reach the server.' }]);
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
   // ── Error / loading states ───────────────────────────────────────────────
   if (notFound) return (
-    <div className="flex items-center justify-center min-h-screen bg-zinc-50 px-4">
+    <div className={`flex items-center justify-center min-h-screen px-4 ${dark ? 'bg-black' : 'bg-zinc-50'}`}>
       <div className="text-center">
-        <p className="text-sm text-zinc-500 uppercase tracking-widest mb-2">Session not found</p>
-        <p className="text-xs text-zinc-400">The session may have ended or the link is invalid.</p>
+        <p className={`text-sm uppercase tracking-widest mb-2 ${dark ? 'text-zinc-400' : 'text-zinc-500'}`}>Session not found</p>
+        <p className={`text-xs ${dark ? 'text-zinc-500' : 'text-zinc-400'}`}>The session may have ended or the link is invalid.</p>
       </div>
     </div>
   );
 
   if (!session) return (
-    <div className="flex items-center justify-center min-h-screen bg-zinc-50 px-4">
-      <p className="text-sm text-zinc-400">Loading…</p>
+    <div className={`flex items-center justify-center min-h-screen px-4 ${dark ? 'bg-black' : 'bg-zinc-50'}`}>
+      <p className={`text-sm ${dark ? 'text-zinc-500' : 'text-zinc-400'}`}>Loading…</p>
     </div>
   );
 
+  const T = {
+    root:        dark ? 'bg-black text-white'        : 'bg-zinc-50 text-zinc-900',
+    header:      dark ? 'bg-zinc-950 border-white/10' : 'bg-white border-zinc-200',
+    headerLabel: dark ? 'text-white/30'               : 'text-zinc-400',
+    headerTitle: dark ? 'text-white'                  : 'text-zinc-900',
+    headerSub:   dark ? 'text-white/50'               : 'text-zinc-500',
+    tabBar:      dark ? 'bg-zinc-950 border-white/10' : 'bg-white border-zinc-200',
+    tabActive:   dark ? 'border-white text-white'     : 'border-zinc-900 text-zinc-900',
+    tabInactive: dark ? 'border-transparent text-white/30 hover:text-white/60' : 'border-transparent text-zinc-400 hover:text-zinc-600',
+    sectionLabel:dark ? 'text-white/30'               : 'text-zinc-400',
+    feedback:    dark ? 'text-white/50'               : 'text-zinc-500',
+    textarea:    dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30 focus:ring-white/10' : 'border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-zinc-900/10',
+    charCount:   dark ? 'text-white/30'               : 'text-zinc-400',
+    submitBtn:   dark ? 'bg-white text-black hover:bg-white/80' : 'bg-zinc-900 text-white hover:bg-zinc-700',
+    darkToggle:  dark ? 'text-white/30 hover:text-white/60' : 'text-zinc-400 hover:text-zinc-600',
+    chatBubbleUser: dark ? 'bg-white text-black' : 'bg-zinc-900 text-white',
+    chatBubbleBot:  dark ? 'bg-white/10 text-white' : 'bg-white text-zinc-900 border border-zinc-200',
+    chatStale:      dark ? 'text-yellow-400/60' : 'text-yellow-600',
+    chatInput:   dark ? 'border-white/10 bg-zinc-900 text-white placeholder:text-white/20 focus:border-white/30' : 'border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400',
+  };
+
   return (
-    <div className="flex flex-col min-h-screen bg-zinc-50">
+    <div className={`flex flex-col min-h-screen ${T.root}`}>
       <FloatingReactions reactions={reactions} />
 
       {/* Header */}
-      <header className="bg-white border-b border-zinc-200 px-4 py-4">
-        <p className="text-xs text-zinc-400 uppercase tracking-widest">Audience</p>
-        <h1 className="text-lg font-semibold text-zinc-900 mt-0.5 leading-tight">{session.topic}</h1>
-        <p className="text-sm text-zinc-500">with {session.speakerName}</p>
+      <header className={`border-b px-4 py-4 flex items-start justify-between ${T.header}`}>
+        <div>
+          <p className={`text-xs uppercase tracking-widest ${T.headerLabel}`}>Audience</p>
+          <h1 className={`text-lg font-semibold mt-0.5 leading-tight ${T.headerTitle}`}>{session.topic}</h1>
+          <p className={`text-sm ${T.headerSub}`}>with {session.speakerName}</p>
+        </div>
+        <button
+          onClick={() => setDark(v => !v)}
+          className={`mt-1 text-lg transition-colors ${T.darkToggle}`}
+          aria-label="Toggle dark mode"
+        >
+          {dark ? '☀️' : '🌙'}
+        </button>
       </header>
 
       {/* Tabs */}
-      <div className="flex border-b border-zinc-200 bg-white">
-        {(['react', 'ask'] as Tab[]).map(t => (
+      <div className={`flex border-b ${T.tabBar}`}>
+        {(['react', 'ask', 'chat'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`flex-1 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              tab === t
-                ? 'border-zinc-900 text-zinc-900'
-                : 'border-transparent text-zinc-400 hover:text-zinc-600'
+              tab === t ? T.tabActive : T.tabInactive
             }`}
           >
-            {t === 'react' ? 'React' : 'Ask'}
+            {t === 'react' ? 'React' : t === 'ask' ? 'Ask' : 'Chat'}
           </button>
         ))}
       </div>
@@ -227,7 +304,7 @@ export default function AudiencePage() {
 
         {tab === 'react' && (
           <div className="flex flex-col gap-4">
-            <p className="text-xs text-zinc-400 uppercase tracking-widest">How's it going?</p>
+            <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>How's it going?</p>
             <SignalButtons
               onSignal={sendSignal}
               lastSignal={lastSignal}
@@ -235,38 +312,92 @@ export default function AudiencePage() {
               sending={sending}
             />
             {feedback && (
-              <p className="text-sm text-center text-zinc-500">{feedback}</p>
+              <p className={`text-sm text-center ${T.feedback}`}>{feedback}</p>
             )}
           </div>
         )}
 
         {tab === 'ask' && (
           <div className="flex flex-col gap-4">
-            <p className="text-xs text-zinc-400 uppercase tracking-widest">Ask a question</p>
+            <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>Ask a question</p>
             <textarea
               value={question}
               onChange={e => setQuestion(e.target.value.slice(0, 200))}
               disabled={qCooldownLeft > 0}
               placeholder="What's on your mind?"
               rows={4}
-              className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 resize-none outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/10 disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`w-full rounded-2xl border px-4 py-3 text-sm resize-none outline-none focus:ring-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${T.textarea}`}
             />
             <div className="flex items-center justify-between">
-              <span className="text-xs text-zinc-400">{question.length}/200</span>
+              <span className={`text-xs ${T.charCount}`}>{question.length}/200</span>
               {qCooldownLeft > 0 && (
-                <span className="text-xs text-zinc-400">Wait {qCooldownLeft}s</span>
+                <span className={`text-xs ${T.charCount}`}>Wait {qCooldownLeft}s</span>
               )}
             </div>
             <button
               onClick={sendQuestion}
               disabled={!question.trim() || qSending || qCooldownLeft > 0}
-              className="w-full py-3 rounded-full bg-zinc-900 text-white text-sm font-medium transition hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              className={`w-full py-3 rounded-full text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${T.submitBtn}`}
             >
               {qSending ? 'Submitting…' : 'Submit question'}
             </button>
             {qFeedback && (
-              <p className="text-sm text-center text-zinc-500">{qFeedback}</p>
+              <p className={`text-sm text-center ${T.feedback}`}>{qFeedback}</p>
             )}
+          </div>
+        )}
+        {tab === 'chat' && (
+          <div className="flex flex-col gap-3 h-full">
+            <p className={`text-xs uppercase tracking-widest ${T.sectionLabel}`}>Ask the AI about this talk</p>
+
+            {/* Message list */}
+            <div className="flex flex-col gap-3 flex-1 overflow-y-auto max-h-[55vh] pb-2">
+              {chatMessages.length === 0 && (
+                <p className={`text-sm text-center mt-8 ${T.feedback}`}>
+                  Ask anything about what the speaker has covered so far.
+                </p>
+              )}
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                    msg.role === 'user' ? T.chatBubbleUser : T.chatBubbleBot
+                  }`}>
+                    {msg.text}
+                    {msg.stale && (
+                      <p className={`text-[10px] mt-1 ${T.chatStale}`}>Context may be slightly behind</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {chatSending && (
+                <div className="flex justify-start">
+                  <div className={`px-4 py-2.5 rounded-2xl text-sm ${T.chatBubbleBot}`}>
+                    <span className="animate-pulse">Thinking…</span>
+                  </div>
+                </div>
+              )}
+              <div ref={chatBottomRef} />
+            </div>
+
+            {/* Input */}
+            <div className="flex gap-2 pt-1">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value.slice(0, 300))}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()}
+                disabled={chatSending || chatCooldownLeft > 0}
+                placeholder={chatCooldownLeft > 0 ? `Wait ${chatCooldownLeft}s…` : 'Ask something…'}
+                className={`flex-1 rounded-full border px-4 py-2.5 text-sm outline-none transition-colors disabled:opacity-50 ${T.chatInput}`}
+              />
+              <button
+                onClick={sendChat}
+                disabled={!chatInput.trim() || chatSending || chatCooldownLeft > 0}
+                className={`px-4 py-2.5 rounded-full text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed ${T.submitBtn}`}
+              >
+                Send
+              </button>
+            </div>
           </div>
         )}
       </div>

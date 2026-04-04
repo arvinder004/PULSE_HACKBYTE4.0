@@ -80,6 +80,8 @@ export default function SpeakerView() {
   const cooldownUntilRef = useRef(0);
   const lastCaptionRef = useRef('');
   const lastCaptionSentAt = useRef(0);
+  const lastFlushedTextRef = useRef('');
+  const [transcriptLive, setTranscriptLive] = useState(false);
 
   const spacetime = useSpacetimeSession(sessionId);
 
@@ -160,8 +162,29 @@ export default function SpeakerView() {
     }
   }, [sessionId, sessionStarted, captionsEnabled, transcript.finalText, spacetime.reducers, DEBUG]);
 
-  // SSE — live signal counts + floating reactions
+  // 20s transcript flush → MongoDB
   useEffect(() => {
+    if (!sessionId || !sessionStarted) return;
+    const interval = setInterval(async () => {
+      const text = transcript.getLast60s().trim();
+      if (!text || text === lastFlushedTextRef.current) return;
+      lastFlushedTextRef.current = text;
+      try {
+        await fetch('/api/transcript', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, text, ts: Date.now() }),
+        });
+        setTranscriptLive(true);
+        if (DEBUG) console.log('[PULSE][R1][Transcript] flushed', text.length, 'chars');
+      } catch (e) {
+        if (DEBUG) console.log('[PULSE][R1][Transcript] flush failed', String(e));
+      }
+    }, 20_000);
+    return () => clearInterval(interval);
+  }, [sessionId, sessionStarted, transcript]);
+
+  // SSE — live signal counts + floating reactions  useEffect(() => {
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onmessage = (e) => {
@@ -275,6 +298,7 @@ export default function SpeakerView() {
         dark={dark}
         onToggleDark={() => setDark(v => !v)}
         signalCount={total}
+        transcriptLive={transcriptLive}
         micSupported={transcript.supported}
         micEnabled={micEnabled}
         onToggleMic={async () => {
