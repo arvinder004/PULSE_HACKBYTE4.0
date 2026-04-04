@@ -95,8 +95,9 @@ export default function SpeakerView() {
   const [localCaptions, setLocalCaptions] = useState<{ id: string; text: string; ts: number }[]>([]);
   const localCaptionsRef = useRef<{ id: string; text: string; ts: number }[]>([]);
 
-  // Questions panel — realtime via SpacetimeDB, classification from MongoDB
+  // Questions panel — polled from /api/questions, classification from MongoDB
   const [showQuestions, setShowQuestions] = useState(false);
+  const [polledQuestions, setPolledQuestions] = useState<Array<{ id: string; text: string; upvotes: number; answered?: boolean; dismissed?: boolean }>>([]);
   const [questionMeta, setQuestionMeta] = useState<Record<string, {
     category: string; urgency: 'high' | 'medium' | 'low'; themeTag: string; reason: string;
   }>>({});
@@ -130,10 +131,26 @@ export default function SpeakerView() {
       });
   }, [sessionId]);
 
-  // Re-fetch classification whenever a new question arrives (SpacetimeDB fires)
+  // Poll /api/questions every 5s (same source as producer)
+  useEffect(() => {
+    if (!sessionId || sessionEnded) return;
+    let alive = true;
+    async function fetchQs() {
+      try {
+        const res = await fetch(`/api/questions?sessionId=${sessionId}`);
+        const json = await res.json().catch(() => []);
+        if (alive) setPolledQuestions(Array.isArray(json) ? json : []);
+      } catch {}
+    }
+    fetchQs();
+    const id = setInterval(fetchQs, 5_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [sessionId, sessionEnded]);
+
+  // Re-fetch classification whenever a new question arrives
   const prevQuestionCount = useRef(0);
   useEffect(() => {
-    const qs = spacetime.questions || [];
+    const qs = polledQuestions || [];
     if (qs.length > prevQuestionCount.current) {
       prevQuestionCount.current = qs.length;
       // Small delay to let Agent 3 finish classifying
@@ -159,12 +176,12 @@ export default function SpeakerView() {
           });
       }, 3000);
     }
-  }, [sessionId, spacetime.questions]);
+  }, [sessionId, polledQuestions]);
 
   // Auto-dismiss timers — set when a question first appears
   const [dismissedQIds, setDismissedQIds] = useState<Set<string>>(new Set());
   useEffect(() => {
-    for (const q of spacetime.questions ?? []) {
+    for (const q of polledQuestions ?? []) {
       if (questionTimers.current.has(q.id)) continue;
       const meta = questionMeta[q.id];
       const urgency = meta?.urgency ?? 'low';
@@ -177,10 +194,10 @@ export default function SpeakerView() {
       questionTimers.current.set(q.id, t);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spacetime.questions, questionMeta]);
+  }, [polledQuestions, questionMeta]);
 
-  // Derive display list: SpacetimeDB rows + classification + filter dismissed
-  const speakerQuestions = (spacetime.questions ?? [])
+  // Derive display list: polled questions + classification + filter dismissed
+  const speakerQuestions = (polledQuestions ?? [])
     .filter((q: any) => !dismissedQIds.has(q.id))
     .map((q: any) => {
       const meta = questionMeta[q.id];
