@@ -184,7 +184,8 @@ export default function SpeakerView() {
     return () => clearInterval(interval);
   }, [sessionId, sessionStarted, transcript]);
 
-  // SSE — live signal counts + floating reactions  useEffect(() => {
+  // SSE — live signal counts + floating reactions
+  useEffect(() => {
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onmessage = (e) => {
