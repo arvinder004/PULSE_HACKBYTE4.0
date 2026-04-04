@@ -73,7 +73,7 @@ export default function Home() {
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-white">
-      <p className="text-sm text-black/30">Loading…</p>
+      <p className="text-sm text-black">Loading…</p>
     </div>
   );
 
@@ -82,8 +82,8 @@ export default function Home() {
       <div className="w-full max-w-sm">
 
         <div className="mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight">PULSE</h1>
-          <p className="text-sm text-black/70 mt-1">Real-time audience intelligence</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-black">PULSE</h1>
+          <p className="text-sm text-black mt-1">Real-time audience intelligence</p>
         </div>
 
         {/* Auth forms */}
@@ -105,7 +105,7 @@ export default function Home() {
               {submitting ? '…' : view === 'login' ? 'Sign in' : 'Create account'}
             </button>
 
-            <p className="text-xs text-black/70 text-center">
+            <p className="text-xs text-black text-center">
               {view === 'login' ? "Don't have an account? " : 'Already have an account? '}
               <button
                 type="button"
@@ -122,8 +122,8 @@ export default function Home() {
         {view === 'session' && user && (
           <form onSubmit={handleCreateSession} className="flex flex-col gap-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm text-black/70">Signed in as <span className="text-black font-medium">{user.name}</span></p>
-              <button type="button" onClick={handleLogout} className="text-xs text-black/50 hover:text-black underline underline-offset-2">
+              <p className="text-sm text-black">Signed in as <span className="text-black font-medium">{user.name}</span></p>
+              <button type="button" onClick={handleLogout} className="text-xs text-black hover:text-black/60 underline underline-offset-2">
                 Sign out
               </button>
             </div>
@@ -152,14 +152,14 @@ function Field({ label, name, type, placeholder, defaultValue }: {
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs text-black/70 font-medium uppercase tracking-wide">{label}</label>
+      <label className="text-xs text-black font-medium uppercase tracking-wide">{label}</label>
       <input
         name={name}
         type={type}
         placeholder={placeholder}
         defaultValue={defaultValue}
         required
-        className="w-full border border-black/10 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-black/30 transition-colors placeholder:text-black/20"
+        className="w-full border border-black/20 rounded-lg px-3 py-2.5 text-sm text-black outline-none focus:border-black/50 transition-colors placeholder:text-black/40"
       />
     </div>
   );
