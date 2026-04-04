@@ -78,9 +78,9 @@ export async function analyzeIntervention({ sessionId, transcript, signals }: An
       });
       textResp = await res.text();
     } else {
-      if (DEBUG) console.log('[PULSE][Phase3][Gemini] public API call', { sessionId, model: process.env.GEMINI_MODEL ?? 'gemini-1.5-flash' });
+      if (DEBUG) console.log('[PULSE][Phase3][Gemini] public API call', { sessionId, model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash' });
       // Public API mode
-      const model = process.env.GEMINI_MODEL ?? 'gemini-1.5-flash';
+      const model = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`;
 
       const res = await fetch(url, {

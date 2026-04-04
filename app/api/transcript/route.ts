@@ -1,53 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
-import Transcript from '@/lib/models/Transcript';
+import TranscriptChunk from '@/lib/models/TranscriptChunk';
 
 function isValidSessionId(id: string) {
   return /^[a-z0-9]{12}$/.test(id);
 }
 
-// POST — append a chunk and rebuild fullText
-export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null) as {
-    sessionId?: string;
-    text?: string;
-    ts?: number;
-  } | null;
-
-  if (!body?.sessionId || !body?.text?.trim()) {
-    return NextResponse.json({ error: 'sessionId and text are required' }, { status: 400 });
-  }
-  if (!isValidSessionId(body.sessionId)) {
-    return NextResponse.json({ error: 'Invalid sessionId' }, { status: 400 });
-  }
-
-  await connectDB();
-
-  const chunk = { text: body.text.trim(), ts: body.ts ?? Date.now() };
-
-  // Upsert: push chunk, rebuild fullText + wordCount
-  const doc = await Transcript.findOneAndUpdate(
-    { sessionId: body.sessionId },
-    {
-      $push: { chunks: chunk },
-      $set:  { updatedAt: new Date() },
-      $setOnInsert: { createdAt: new Date() },
-    },
-    { upsert: true, new: true }
-  );
-
-  // Rebuild fullText from all chunks (keep it fresh)
-  const fullText = doc.chunks.map((c: any) => c.text).join(' ');
-  const wordCount = fullText.split(/\s+/).filter(Boolean).length;
-  doc.fullText  = fullText;
-  doc.wordCount = wordCount;
-  await doc.save();
-
-  console.log('[PULSE][R1][Transcript] flush', { sessionId: body.sessionId, wordCount });
-  return NextResponse.json({ ok: true, wordCount, updatedAt: doc.updatedAt });
-}
-
-// GET — return fullText + metadata for a session
+// GET — assemble fullText from all transcribed chunks in order
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get('sessionId');
@@ -57,13 +16,29 @@ export async function GET(req: NextRequest) {
 
   await connectDB();
 
-  const doc = await Transcript.findOne({ sessionId }).lean();
-  if (!doc) return NextResponse.json({ fullText: '', wordCount: 0, updatedAt: null, chunks: [] });
+  const chunks = await TranscriptChunk.find({ sessionId })
+    .sort({ chunkIndex: 1 })
+    .lean();
+
+  const transcribed = chunks.filter(c => c.status === 'transcribed' && c.text);
+  const fullText    = transcribed.map(c => c.text).join(' ').trim();
+  const wordCount   = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
+  const updatedAt   = chunks.length ? chunks[chunks.length - 1].createdAt : null;
 
   return NextResponse.json({
-    fullText:  doc.fullText,
-    wordCount: doc.wordCount,
-    updatedAt: doc.updatedAt,
-    chunks:    doc.chunks,
+    fullText,
+    wordCount,
+    updatedAt,
+    totalChunks:      chunks.length,
+    transcribedChunks: transcribed.length,
+    pendingChunks:    chunks.filter(c => c.status === 'pending').length,
+    chunks: chunks.map(c => ({
+      chunkIndex: c.chunkIndex,
+      startTs:    c.startTs,
+      endTs:      c.endTs,
+      status:     c.status,
+      wordCount:  c.wordCount,
+      preview:    c.text?.slice(0, 60),
+    })),
   });
 }

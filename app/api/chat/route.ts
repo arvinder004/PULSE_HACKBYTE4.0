@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
-import Transcript from '@/lib/models/Transcript';
+import TranscriptChunk from '@/lib/models/TranscriptChunk';
 
 // 5s per-user cooldown
 const cooldowns = new Map<string, number>();
@@ -11,7 +11,7 @@ function isValidSessionId(id: string) {
 }
 
 async function askGemini(question: string, transcript: string): Promise<string> {
-  const model = process.env.GEMINI_MODEL ?? 'gemini-1.5-flash';
+  const model = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
   const apiKey = process.env.GEMINI_API_KEY;
 
   const systemPrompt = [
@@ -88,11 +88,17 @@ export async function POST(req: NextRequest) {
 
   await connectDB();
 
-  const doc = await Transcript.findOne({ sessionId: body.sessionId }).lean();
-  const fullText = doc?.fullText ?? '';
-  const updatedAt = doc?.updatedAt ?? null;
-  const transcriptAge = updatedAt
-    ? Math.floor((Date.now() - new Date(updatedAt).getTime()) / 1000)
+  const { sessionId, question } = body as Required<typeof body>;
+
+  const chunks = await TranscriptChunk.find({ sessionId, status: 'transcribed' })
+    .sort({ chunkIndex: 1 })
+    .lean();
+
+  const fullText     = chunks.map(c => c.text).join(' ').trim();
+  const wordCount    = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
+  const lastChunk    = chunks[chunks.length - 1];
+  const transcriptAge = lastChunk
+    ? Math.floor((Date.now() - new Date(lastChunk.createdAt).getTime()) / 1000)
     : null;
 
   const grounded = fullText.trim().length >= 30;
@@ -102,18 +108,18 @@ export async function POST(req: NextRequest) {
       answer: "Not enough context yet — ask after the speaker has talked for a bit.",
       grounded: false,
       transcriptAge,
-      wordCount: 0,
+      wordCount,
     });
   }
 
-  console.log('[PULSE][R1][Chat] question', { sessionId: body.sessionId, qLen: body.question.length, transcriptWords: doc?.wordCount });
+  console.log('[PULSE][R1][Chat] question', { sessionId, qLen: question.length, transcriptWords: wordCount });
 
-  const answer = await askGemini(body.question.trim(), fullText);
+  const answer = await askGemini(question.trim(), fullText);
 
   return NextResponse.json({
     answer,
     grounded: true,
     transcriptAge,
-    wordCount: doc?.wordCount ?? 0,
+    wordCount,
   });
 }

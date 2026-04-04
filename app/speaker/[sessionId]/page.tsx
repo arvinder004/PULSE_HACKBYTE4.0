@@ -6,7 +6,6 @@ import DashboardNav from '@/components/DashboardNav';
 import InterventionCard from '@/components/InterventionCard';
 import useSpeechTranscript from '@/lib/useSpeechTranscript';
 import useAudioRecorder from '@/lib/useAudioRecorder';
-import VoicePlayer from '@/components/VoicePlayer';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 
@@ -68,11 +67,12 @@ export default function SpeakerView() {
   const [sessionStarted, setSessionStarted] = useState(false);
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
-  const [ttsAudioBase64, setTtsAudioBase64] = useState<string | null>(null);
-  const [ttsContentType, setTtsContentType] = useState<string | null>(null);
+  const [confirmEnd, setConfirmEnd] = useState(false);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const reactionId = useRef(0);
   const DEBUG = true;
+
+  const [transcriptLive, setTranscriptLive] = useState(false);
 
   const countsRef = useRef(counts);
   const aiMsgRef = useRef(aiMsg);
@@ -80,8 +80,6 @@ export default function SpeakerView() {
   const cooldownUntilRef = useRef(0);
   const lastCaptionRef = useRef('');
   const lastCaptionSentAt = useRef(0);
-  const lastFlushedTextRef = useRef('');
-  const [transcriptLive, setTranscriptLive] = useState(false);
 
   const spacetime = useSpacetimeSession(sessionId);
 
@@ -90,6 +88,7 @@ export default function SpeakerView() {
     enabled: sessionStarted && micEnabled,
     chunkMs: 30_000,
     onUploaded: (id) => {
+      setTranscriptLive(true);
       if (DEBUG) console.log('[PULSE][Phase3][Audio] stored chunk', id);
     },
   });
@@ -162,29 +161,8 @@ export default function SpeakerView() {
     }
   }, [sessionId, sessionStarted, captionsEnabled, transcript.finalText, spacetime.reducers, DEBUG]);
 
-  // 20s transcript flush → MongoDB
+  // SSE — live signal counts + floating reactions
   useEffect(() => {
-    if (!sessionId || !sessionStarted) return;
-    const interval = setInterval(async () => {
-      const text = transcript.getLast60s().trim();
-      if (!text || text === lastFlushedTextRef.current) return;
-      lastFlushedTextRef.current = text;
-      try {
-        await fetch('/api/transcript', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId, text, ts: Date.now() }),
-        });
-        setTranscriptLive(true);
-        if (DEBUG) console.log('[PULSE][R1][Transcript] flushed', text.length, 'chars');
-      } catch (e) {
-        if (DEBUG) console.log('[PULSE][R1][Transcript] flush failed', String(e));
-      }
-    }, 20_000);
-    return () => clearInterval(interval);
-  }, [sessionId, sessionStarted, transcript]);
-
-  // SSE — live signal counts + floating reactions  useEffect(() => {
     if (!sessionId) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onmessage = (e) => {
@@ -239,7 +217,6 @@ export default function SpeakerView() {
             sessionId,
             transcript: last60,
             signals: curCounts,
-            enableTts: true,
           }),
           headers: { 'Content-Type': 'application/json' },
         });
@@ -258,11 +235,6 @@ export default function SpeakerView() {
         if (res.ok) {
           const data = await res.json().catch(() => null) as any;
           if (DEBUG) console.log('[PULSE][Phase3][Intervene] ok', data?.intervention?.id);
-          if (data?.ttsAudioBase64) {
-            setTtsAudioBase64(data.ttsAudioBase64);
-            setTtsContentType(data.ttsContentType || 'audio/mpeg');
-          }
-          // Match server cooldown to avoid hammering
           cooldownUntilRef.current = Date.now() + 90_000;
         } else {
           cooldownUntilRef.current = Date.now() + 15_000;
@@ -299,6 +271,7 @@ export default function SpeakerView() {
         onToggleDark={() => setDark(v => !v)}
         signalCount={total}
         transcriptLive={transcriptLive}
+        confirmEnd={confirmEnd}
         micSupported={transcript.supported}
         micEnabled={micEnabled}
         onToggleMic={async () => {
@@ -342,7 +315,12 @@ export default function SpeakerView() {
         }}
         onEndSession={async () => {
           if (!sessionStarted) return;
-          if (!confirm('End the session now?')) return;
+          if (!confirmEnd) {
+            setConfirmEnd(true);
+            setTimeout(() => setConfirmEnd(false), 4000); // auto-cancel after 4s
+            return;
+          }
+          setConfirmEnd(false);
           try {
             await fetch('/api/session/end', {
               method: 'POST',
@@ -363,17 +341,6 @@ export default function SpeakerView() {
       />
 
       <InterventionCard sessionId={sessionId} />
-
-      <VoicePlayer
-        text={null}
-        audioBase64={ttsAudioBase64}
-        audioContentType={ttsContentType}
-        enabled={sessionStarted}
-        onDone={() => {
-          setTtsAudioBase64(null);
-          setTtsContentType(null);
-        }}
-      />
 
       {/* Single ambient indicator */}
       <div className="flex flex-col items-center justify-center flex-1 gap-6">
@@ -399,10 +366,10 @@ export default function SpeakerView() {
           <button
             onClick={async () => {
               try {
-                await fetch('/api/session/start', {
+                await fetch('/api/session/end', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ sessionId }),
+                  body: JSON.stringify({ sessionId, reactivate: true }),
                 });
               } catch {}
               setSessionEnded(false);

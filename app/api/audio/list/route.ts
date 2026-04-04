@@ -18,11 +18,13 @@ export async function GET(req: Request) {
     .toArray();
 
   const items = files.map(f => ({
-    id: f._id?.toString?.() ?? String(f._id),
-    filename: f.filename,
-    length: f.length,
-    uploadDate: f.uploadDate,
-    ts: f.metadata?.ts ?? null,
+    id:          f._id?.toString?.() ?? String(f._id),
+    filename:    f.filename,
+    length:      f.length,
+    uploadDate:  f.uploadDate,
+    chunkIndex:  f.metadata?.chunkIndex ?? null,
+    startTs:     f.metadata?.startTs    ?? null,
+    endTs:       f.metadata?.endTs      ?? null,
   }));
 
   return NextResponse.json({ items });

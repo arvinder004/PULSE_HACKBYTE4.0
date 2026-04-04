@@ -157,19 +157,14 @@ export default function useSpeechTranscript() {
         if (DEBUG) console.log('[PULSE][Phase3][Transcript] error ignored (not listening)', code);
         return;
       }
-      setError(code);
+      // Only surface fatal errors to the UI — network blips are silent auto-retries
       errorCountRef.current += 1;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] error', {
-        code,
-        online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
-        timeStamp: ev?.timeStamp,
-        type: ev?.type,
-        trusted: ev?.isTrusted,
-      });
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] error', { code, count: errorCountRef.current });
 
-      // Fatal errors should stop auto-restart until user toggles mic
+      // Fatal errors — mic permission denied, hardware missing, etc.
       const fatal = ['not-allowed', 'service-not-allowed', 'not-supported', 'audio-capture', 'bad-grammar', 'language-not-supported'];
       if (fatal.includes(code)) {
+        setError(code);
         suspendedRef.current = true;
         listeningRef.current = false;
         setListening(false);
@@ -177,22 +172,16 @@ export default function useSpeechTranscript() {
         return;
       }
 
-      if (code === 'network' && errorCountRef.current >= 3) {
-        suspendedRef.current = true;
-        listeningRef.current = false;
-        setListening(false);
-        if (DEBUG) console.log('[PULSE][Phase3][Transcript] suspended after repeated network errors');
-        return;
-      }
-
-      // Non-fatal errors: retry with backoff to avoid rapid loops
-      const delay = Math.min(1000 * (2 ** Math.min(errorCountRef.current - 1, 4)), 15_000);
+      // Network / aborted errors — auto-retry silently, no UI error shown
+      // Gemini handles the real transcription so a Web Speech blip doesn't matter
+      const delay = Math.min(1000 * (2 ** Math.min(errorCountRef.current - 1, 4)), 10_000);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       retryTimerRef.current = setTimeout(() => {
         if (!listeningRef.current || suspendedRef.current) return;
+        errorCountRef.current = 0;
         try { r.start(); } catch {}
       }, delay);
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] retry in', delay, 'ms');
+      if (DEBUG) console.log('[PULSE][Phase3][Transcript] silent retry in', delay, 'ms');
     };
 
     r.onend = () => {

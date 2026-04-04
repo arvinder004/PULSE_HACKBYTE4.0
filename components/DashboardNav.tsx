@@ -9,6 +9,7 @@ interface DashboardNavProps {
   onToggleDark: () => void;
   signalCount?: number;
   transcriptLive?: boolean;
+  confirmEnd?: boolean;
   // Optional speaker controls
   micSupported?: boolean;
   micEnabled?: boolean;
@@ -27,6 +28,7 @@ export default function DashboardNav({
   onToggleDark,
   signalCount = 0,
   transcriptLive = false,
+  confirmEnd = false,
   micSupported = true,
   micEnabled = false,
   onToggleMic,
@@ -119,9 +121,13 @@ export default function DashboardNav({
         {mode === 'speaker' && onEndSession && (
           <button
             onClick={onEndSession}
-            className="px-3 py-1 text-xs border rounded-full border-red-400 text-red-500 hover:text-red-600 cursor-pointer"
+            className={`px-3 py-1 text-xs border rounded-full transition-colors cursor-pointer ${
+              confirmEnd
+                ? 'border-red-500 bg-red-500 text-white'
+                : 'border-red-400 text-red-500 hover:text-red-600'
+            }`}
           >
-            End
+            {confirmEnd ? 'Confirm?' : 'End'}
           </button>
         )}
 
