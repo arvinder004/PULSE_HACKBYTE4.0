@@ -10,13 +10,8 @@ const nextConfig: NextConfig = {
   },
 };
 
-// Suppress HMR WebSocket errors on remote devices by disabling
-// the webpack-hmr endpoint for non-localhost connections.
-// The app still works fine — HMR just won't hot-reload on phones (which is fine).
+// Tell Next.js the public hostname so HMR connects correctly on remote devices
 if (process.env.NEXT_PUBLIC_APP_URL) {
-  const url = new URL(process.env.NEXT_PUBLIC_APP_URL);
-  (nextConfig as any).webpackDevMiddleware = undefined;
-  // Tell Next.js the public hostname so HMR connects correctly
   process.env.__NEXT_PRIVATE_ORIGIN = process.env.NEXT_PUBLIC_APP_URL;
 }
 

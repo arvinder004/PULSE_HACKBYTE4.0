@@ -3,7 +3,6 @@ import { Readable, PassThrough } from 'stream';
 import { createWriteStream } from 'fs';
 import { mkdir } from 'fs/promises';
 import path from 'path';
-import { transcribeAudio } from '@/lib/gemini-transcribe';
 import TranscriptChunk from '@/lib/models/TranscriptChunk';
 
 export async function POST(req: Request) {
@@ -114,53 +113,7 @@ export async function POST(req: Request) {
     console.log('[PULSE][Upload] ✗ TranscriptChunk save error', e?.message, e?.code);
   }
 
-  // ── Gemini transcription (fire-and-forget) ────────────────────────────
-  if (!process.env.GEMINI_API_KEY) {
-    console.log('[PULSE][Transcribe] ⚠ no GEMINI_API_KEY — skipping transcription for chunk', chunkIndex);
-  } else {
-    console.log('[PULSE][Transcribe] ▶ starting async transcription for chunk', chunkIndex);
-    ;(async () => {
-      try {
-        console.log('[PULSE][Transcribe] downloading chunk', chunkIndex, 'from GridFS fileId:', fileId);
-        const dlBucket  = getGridFSBucket('audio');
-        const bufChunks: Buffer[] = [];
-        const dlStream  = dlBucket.openDownloadStream(uploadStream.id);
-
-        await new Promise<void>((resolve, reject) => {
-          dlStream.on('data',  (c: Buffer) => bufChunks.push(c));
-          dlStream.on('end',   resolve);
-          dlStream.on('error', (e) => { console.log('[PULSE][Transcribe] ✗ GridFS download error', (e as any)?.message); reject(e); });
-        });
-
-        const audioBuffer = Buffer.concat(bufChunks);
-        console.log('[PULSE][Transcribe] ✓ downloaded', audioBuffer.length, 'bytes for chunk', chunkIndex);
-
-        const mimeType = contentType.includes('ogg') ? 'audio/ogg' : 'audio/webm';
-        const text = await transcribeAudio(audioBuffer, mimeType);
-        console.log('[PULSE][Transcribe] Gemini response for chunk', chunkIndex, ':', text ? `"${text.slice(0, 120)}"` : '(empty/null)');
-
-        const updateResult = await TranscriptChunk.findOneAndUpdate(
-          { sessionId, chunkIndex },
-          {
-            $set: {
-              text:      text?.trim() ?? '',
-              wordCount: text ? text.trim().split(/\s+/).filter(Boolean).length : 0,
-              status:    text?.trim() ? 'transcribed' : 'failed',
-            },
-          },
-          { new: true }
-        );
-
-        console.log('[PULSE][Transcribe] ✓ chunk', chunkIndex, 'status →', updateResult?.status, '| words:', updateResult?.wordCount);
-      } catch (e: any) {
-        console.log('[PULSE][Transcribe] ✗ error on chunk', chunkIndex, e?.message || e);
-        await TranscriptChunk.findOneAndUpdate(
-          { sessionId, chunkIndex },
-          { $set: { status: 'failed' } }
-        ).catch(() => {});
-      }
-    })();
-  }
+  console.log('[PULSE][Transcribe] ⚠ Gemini STT removed — audio is stored only');
 
   return new Response(
     JSON.stringify({ ok: true, fileId, chunkIndex, localPath: localPath || null, localError }),

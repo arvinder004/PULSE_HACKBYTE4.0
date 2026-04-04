@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
-import TranscriptChunk from '@/lib/models/TranscriptChunk';
+import SegmentSummary from '@/lib/models/SegmentSummary';
 
 // 5s per-user cooldown
 const cooldowns = new Map<string, number>();
@@ -90,16 +90,17 @@ export async function POST(req: NextRequest) {
 
   const { sessionId, question } = body as Required<typeof body>;
 
-  const chunks = await TranscriptChunk.find({ sessionId, status: 'transcribed' })
-    .sort({ chunkIndex: 1 })
+  const segments = await SegmentSummary.find({ sessionId })
+    .sort({ windowStart: 1 })
     .lean();
 
-  const fullText     = chunks.map(c => c.text).join(' ').trim();
-  const wordCount    = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
-  const lastChunk    = chunks[chunks.length - 1];
-  const transcriptAge = lastChunk
-    ? Math.floor((Date.now() - new Date(lastChunk.createdAt).getTime()) / 1000)
-    : null;
+  const fullText  = segments.map(s => s.transcript || '').join(' ').trim();
+  const wordCount = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
+  const lastSeg = segments[segments.length - 1];
+  const lastTs = typeof lastSeg?.windowEnd === 'number'
+    ? lastSeg.windowEnd
+    : (lastSeg?.createdAt ? new Date(lastSeg.createdAt).getTime() : null);
+  const transcriptAge = lastTs != null ? Math.floor((Date.now() - lastTs) / 1000) : null;
 
   const grounded = fullText.trim().length >= 30;
 

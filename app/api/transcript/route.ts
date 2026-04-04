@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
-import TranscriptChunk from '@/lib/models/TranscriptChunk';
+import SegmentSummary from '@/lib/models/SegmentSummary';
 
 function isValidSessionId(id: string) {
   return /^[a-z0-9]{12}$/.test(id);
@@ -16,29 +16,32 @@ export async function GET(req: NextRequest) {
 
   await connectDB();
 
-  const chunks = await TranscriptChunk.find({ sessionId })
-    .sort({ chunkIndex: 1 })
+  const segments = await SegmentSummary.find({ sessionId })
+    .sort({ windowStart: 1 })
     .lean();
 
-  const transcribed = chunks.filter(c => c.status === 'transcribed' && c.text);
-  const fullText    = transcribed.map(c => c.text).join(' ').trim();
-  const wordCount   = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
-  const updatedAt   = chunks.length ? chunks[chunks.length - 1].createdAt : null;
+  const fullText  = segments.map(s => s.transcript || '').join(' ').trim();
+  const wordCount = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
+  const lastSeg = segments[segments.length - 1];
+  const updatedAt = lastSeg?.windowEnd
+    ? new Date(lastSeg.windowEnd)
+    : (lastSeg?.createdAt ?? null);
 
   return NextResponse.json({
     fullText,
     wordCount,
     updatedAt,
-    totalChunks:      chunks.length,
-    transcribedChunks: transcribed.length,
-    pendingChunks:    chunks.filter(c => c.status === 'pending').length,
-    chunks: chunks.map(c => ({
-      chunkIndex: c.chunkIndex,
-      startTs:    c.startTs,
-      endTs:      c.endTs,
-      status:     c.status,
-      wordCount:  c.wordCount,
-      preview:    c.text?.slice(0, 60),
+    totalChunks: segments.length,
+    transcribedChunks: segments.length,
+    pendingChunks: 0,
+    chunks: segments.map((s, idx) => ({
+      chunkIndex: idx,
+      startTs:    s.windowStart,
+      endTs:      s.windowEnd,
+      status:     'summary',
+      wordCount:  s.wordCount,
+      text:       s.transcript || '',
+      preview:    s.transcript?.slice(0, 60),
     })),
   });
 }

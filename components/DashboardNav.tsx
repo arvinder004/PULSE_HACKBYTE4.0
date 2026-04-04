@@ -58,7 +58,14 @@ export default function DashboardNav({
         {/* Transcript live indicator */}
         {mode === 'speaker' && (
           <span className="flex items-center gap-1.5 px-3 py-1 text-xs border rounded-full border-transparent">
-            <span className={`w-1.5 h-1.5 rounded-full ${transcriptLive ? 'bg-emerald-400 animate-pulse' : 'bg-white/20'}`} />
+            {transcriptLive ? (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+              </span>
+            ) : (
+              <span className="w-1.5 h-1.5 rounded-full bg-white/20" />
+            )}
             <span className={transcriptLive ? 'text-emerald-400' : (dark ? 'text-white/20' : 'text-black/20')}>
               {transcriptLive ? 'Transcript live' : 'Transcript off'}
             </span>
@@ -86,7 +93,7 @@ export default function DashboardNav({
             onClick={onToggleMic}
             disabled={!micSupported}
             className={`px-3 py-1 text-xs border rounded-full transition-colors ${t.toggle} ${!micSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title={micSupported ? 'Toggle microphone transcript' : 'Speech recognition not supported in this browser'}
+            title={micSupported ? 'Toggle microphone transcript' : 'Deepgram streaming not supported in this browser'}
           >
             {micSupported ? (micEnabled ? 'Mic On' : 'Mic Off') : 'Mic N/A'}
           </button>

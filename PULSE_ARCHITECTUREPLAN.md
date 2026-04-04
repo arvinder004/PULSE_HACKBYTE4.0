@@ -8,7 +8,7 @@ PULSE is a real-time, AI-assisted “room whisperer” for live talks.
 
 - Audience members send lightweight feedback (signals + questions) from their phones.
 - Speaker and producer dashboards receive near-real-time updates via **Server-Sent Events (SSE)**.
-- The system records **60s audio chunks**, stores them durably, and uses **Gemini speech-to-text (STT)** to build a transcript.
+- The system streams microphone audio to **Deepgram STT**, stores live captions in **SpacetimeDB**, and rolls up a **60s caption summary** into MongoDB.
 - Interventions are generated via **Gemini reasoning** when confusion/pacing signals cross simple thresholds.
 
 The current implementation is:
@@ -17,7 +17,8 @@ The current implementation is:
 - **MongoDB (Mongoose)**: durable documents (sessions, interventions, transcript chunks, users).
 - **GridFS**: durable audio blobs (uploaded chunks).
 - **SSE + in-memory state**: real-time fanout for signals and intervention events.
-- **Gemini**: STT transcription + transcript-grounded chat + intervention reasoning.
+- **Gemini**: intervention reasoning + 60s segment summaries.
+- **Deepgram**: realtime speech-to-text for live captions.
 - **SpacetimeDB (present, optional)**: a realtime module + generated client bindings exist in the repo; it is not required for the core signals/transcript flow.
 
 Non-goals for this document: endpoints that do not exist under `app/api/`.
@@ -36,17 +37,20 @@ graph LR
 
   API --> SSE[/api/signals SSE fanout/]
   API --> Sess[/api/session + auth/]
-  API --> Audio[/api/audio/* + /api/transcript/]
+  API --> Summary[/api/summary/]
+  API --> Transcript[/api/transcript/]
+  API --> Audio["/api/audio/* (optional)"]
   API --> Chat[/api/chat/]
   API --> Intervene[/api/intervene/]
 
   Sess --> Mongo[(MongoDB)]
   Intervene --> Mongo
+  Summary --> Mongo
   Audio --> Mongo
 
   Audio --> GFS[(GridFS: audio bucket)]
 
-  Audio --> Gemini[Gemini STT]
+  UI --> Deepgram[Deepgram STT]
   Chat --> Gemini
   Intervene --> Gemini
 
@@ -55,7 +59,7 @@ graph LR
 
 ### What’s true in code today
 
-- **Transcript source of truth** is server-side (Gemini STT) via `/api/audio/upload` → async transcription → `TranscriptChunk` in MongoDB.
+- **Transcript source of truth** is client-side Deepgram captions stored in SpacetimeDB. Every 60 seconds, captions are summarized via `/api/summary` and persisted to MongoDB.
 - **Signals source of truth** is in-memory per Next.js process; clients subscribe via SSE (`/api/signals?sse=1`).
 
 ### SpacetimeDB (present in the repo)
@@ -66,7 +70,7 @@ SpacetimeDB is present as a separate module and client wiring:
 - Generated client bindings: `src/module_bindings/`
 - Client integration points: `components/SpacetimeProvider.tsx` and `lib/useSpacetimeSession.ts`
 
-It is not required for the core SSE + MongoDB + Gemini STT pipeline described above.
+It now powers live captions storage and the 60s summary pipeline, so summaries depend on it.
 
 ---
 
@@ -86,8 +90,9 @@ flowchart TB
       SessionAPI["session + auth"]
       SignalsAPI["signals (SSE)"]
       QuestionsAPI["questions"]
-      AudioAPI["audio upload/list"]
+      SummaryAPI["summary (60s captions)"]
       TranscriptAPI["transcript"]
+      AudioAPI["audio upload/list (optional)"]
       InterveneAPI["intervene"]
       ChatAPI["chat"]
     end
@@ -96,7 +101,7 @@ flowchart TB
   subgraph Lib["Server/Shared Libs (lib/*)"]
     DB["db.ts (Mongo + GridFS)"]
     Models["models/* (Mongoose)"]
-    GeminiLib["gemini.ts + gemini-transcribe.ts"]
+    GeminiLib["gemini.ts (reasoning + summaries)"]
     AuthLib["jwt.ts"]
     Fingerprint["fingerprint.ts"]
   end
@@ -113,6 +118,7 @@ flowchart TB
 
   subgraph External["External AI"]
     Gemini[Gemini API]
+    Deepgram[Deepgram STT]
   end
 
   UI --> API
@@ -123,6 +129,7 @@ flowchart TB
   Models --> Mongo
 
   GeminiLib --> Gemini
+  UI --> Deepgram
 
   UI -. "WS (optional)" .-> STDB
   Bindings -.-> UI
@@ -148,12 +155,14 @@ flowchart TB
 - **Interventions**
   - `POST /api/intervene` (Gemini reasoning; persists to MongoDB; broadcast to clients)
   - `GET /api/intervene?sessionId=...` (last 10)
-- **Audio + transcription**
-  - `POST /api/audio/upload` (store chunk to GridFS; async Gemini STT; write `TranscriptChunk`)
+- **Captions + summaries**
+  - Deepgram streaming in the speaker client → captions stored in SpacetimeDB
+  - `POST /api/summary` (summarize last 60s captions → `SegmentSummary` in Mongo)
+  - `GET /api/transcript?sessionId=...` (assemble transcript from summaries)
+  - `POST /api/audio/upload` (optional audio storage)
   - `GET /api/audio/list?sessionId=...`
-  - `GET /api/transcript?sessionId=...` (assemble transcript)
 - **Transcript-grounded chat**
-  - `POST /api/chat` (answers using transcript only; heuristic fallback when Gemini is not configured)
+  - `POST /api/chat` (answers using transcript summaries only; heuristic fallback when Gemini is not configured)
 
 ---
 
@@ -163,18 +172,21 @@ flowchart TB
 flowchart LR
   Client["Browsers<br/>Speaker + Producer + Audience"] --> Signals["/api/signals<br/>SSE + POST"]
   Client --> Session["/api/session + /api/auth"]
-  Client --> Audio["/api/audio/upload + /api/transcript"]
+  Client --> Summary["/api/summary + /api/transcript"]
+  Client --> Audio["/api/audio/upload (optional)"]
   Client --> Chat["/api/chat"]
   Client --> Intervene["/api/intervene"]
+  Client -. "WS" .-> Deepgram[Deepgram STT]
 
   Signals --> Mem[(In-memory state)]
 
   Session --> Mongo[(MongoDB)]
   Intervene --> Mongo
+  Summary --> Mongo
   Audio --> Mongo
 
   Audio --> GridFS[(GridFS audio)]
-  Audio --> Gemini[Gemini STT]
+  Summary --> Gemini
   Chat --> Gemini
   Intervene --> Gemini
 ```
@@ -221,32 +233,32 @@ flowchart TD
   Broadcast --> UI[Speaker shows whisper overlay]
 ```
 
-### 3) Audio Upload → GridFS → Async Gemini STT → Transcript + Chat
+### 3) Deepgram Live Captions → SpacetimeDB → 60s Summary → Transcript + Chat
 
 ```mermaid
 sequenceDiagram
   participant Spk as Speaker Browser
-  participant Rec as MediaRecorder (60s chunks)
-  participant Up as POST /api/audio/upload
-  participant FS as GridFS (audio)
-  participant T as TranscriptChunk (Mongo)
-  participant Gem as Gemini STT
+  participant DG as Deepgram STT
+  participant ST as SpacetimeDB (captions)
+  participant Sum as POST /api/summary
+  participant Seg as SegmentSummary (Mongo)
+  participant Gem as Gemini
   participant Tr as GET /api/transcript
   participant Chat as POST /api/chat
 
-  Spk->>Rec: Start mic
-  Rec->>Up: Upload chunk (multipart/form-data)
-  Up->>FS: Store audio bytes
-  Up->>T: Upsert TranscriptChunk{status: pending}
-  par Async transcription
-    Up->>Gem: Download bytes -> transcribe
-    Gem-->>Up: Transcript text
-    Up->>T: Update chunk status transcribed/failed
+  Spk->>DG: Stream mic audio (WebSocket)
+  DG-->>Spk: Live transcripts (interim + final)
+  Spk->>ST: submit_caption (final chunks)
+  loop every 60s
+    Spk->>Sum: windowStart + windowEnd + transcript
+    Sum->>Gem: summarizeSegment
+    Gem-->>Sum: summary JSON
+    Sum->>Seg: Upsert SegmentSummary
   end
   Spk->>Tr: Fetch assembled transcript
-  Tr->>T: Read all transcribed chunks
+  Tr->>Seg: Read summaries
   Tr-->>Spk: fullText + metadata
-  Chat->>T: Load transcript text
+  Chat->>Seg: Load transcript text
   Chat->>Gem: Answer using transcript only
   Chat-->>Spk: Answer
 ```
@@ -287,22 +299,21 @@ erDiagram
     date createdAt
   }
 
-  TRANSCRIPT_CHUNK {
+  SEGMENT_SUMMARY {
     string _id
     string sessionId
-    int chunkIndex
-    long startTs
-    long endTs
-    string audioFileId
-    string audioFilename
-    string text
+    long windowStart
+    long windowEnd
+    string transcript
+    string summary
+    string improvement
+    string[] focusTags
     int wordCount
-    string status
     date createdAt
   }
 
   SESSION ||--o{ INTERVENTION : has
-  SESSION ||--o{ TRANSCRIPT_CHUNK : has
+  SESSION ||--o{ SEGMENT_SUMMARY : has
 ```
 
 ### GridFS (durable blobs)
@@ -337,7 +348,7 @@ This document intentionally describes only what’s currently implemented.
 The codebase includes a few pieces that exist but are not required for the core path above:
 
 - **ElevenLabs TTS**: `/api/tts` and optional TTS logic in `/api/intervene` exist, but the current UI does not request TTS by default.
-- **Live captions via Web Speech + SpacetimeDB**: client wiring exists, but it is not part of the server-side transcript source of truth (Gemini STT is).
+- **Audio chunk uploads**: still available for archival, but transcription is now driven by Deepgram live captions.
 
 ---
 

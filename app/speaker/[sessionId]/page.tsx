@@ -5,7 +5,6 @@ import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
 import InterventionCard from '@/components/InterventionCard';
 import useSpeechTranscript from '@/lib/useSpeechTranscript';
-import useAudioRecorder from '@/lib/useAudioRecorder';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 import { useTheme } from '@/lib/useTheme';
@@ -67,13 +66,14 @@ export default function SpeakerView() {
   const [aiPausedUntil, setAiPausedUntil] = useState(0);
   const [sessionStarted, setSessionStarted] = useState(false);
   const [captionsEnabled, setCaptionsEnabled] = useState(false);
+  const [captionsExpanded, setCaptionsExpanded] = useState(false);
+  const [transcriptHistory, setTranscriptHistory] = useState<{ text: string; startTs: number }[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const reactionId = useRef(0);
   const DEBUG = true;
-
-  const [transcriptLive, setTranscriptLive] = useState(false);
 
   const countsRef = useRef(counts);
   const aiMsgRef = useRef(aiMsg);
@@ -81,30 +81,14 @@ export default function SpeakerView() {
   const cooldownUntilRef = useRef(0);
   const lastCaptionRef = useRef('');
   const lastCaptionSentAt = useRef(0);
-
   const spacetime = useSpacetimeSession(sessionId);
+  const captionsRef = useRef<any[]>([]);
+  const summaryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSummaryEndRef = useRef(0);
+  // Local rolling buffer — persists across SpacetimeDB reconnects
+  const [localCaptions, setLocalCaptions] = useState<{ id: string; text: string; ts: number }[]>([]);
 
-  const audioRecorder = useAudioRecorder({
-    sessionId,
-    enabled: sessionStarted && micEnabled,
-    chunkMs: 60_000,
-    onUploaded: (id) => {
-      setTranscriptLive(true);
-      if (DEBUG) console.log('[PULSE][Phase3][Audio] stored chunk', id);
-    },
-  });
-
-  useEffect(() => {
-    if (!audioRecorder.supported && DEBUG) {
-      console.log('[PULSE][Phase3][Audio] MediaRecorder not supported');
-    }
-  }, [audioRecorder.supported]);
-
-  useEffect(() => {
-    if (audioRecorder.lastError && DEBUG) {
-      console.log('[PULSE][Phase3][Audio] error', audioRecorder.lastError);
-    }
-  }, [audioRecorder.lastError]);
+  const transcriptLive = transcript.listening;
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -120,6 +104,10 @@ export default function SpeakerView() {
   useEffect(() => {
     aiPausedUntilRef.current = aiPausedUntil;
   }, [aiPausedUntil]);
+
+  useEffect(() => {
+    captionsRef.current = spacetime.captions || [];
+  }, [spacetime.captions]);
 
   useEffect(() => {
     // Always stop recognition on unmount.
@@ -139,7 +127,7 @@ export default function SpeakerView() {
 
   // Push final captions into SpacetimeDB (throttled)
   useEffect(() => {
-    if (!sessionStarted || !captionsEnabled) return;
+    if (!sessionStarted || !micEnabled) return;
     const finalText = transcript.finalText?.trim?.() || '';
     if (!finalText || finalText === lastCaptionRef.current) return;
     const now = Date.now();
@@ -156,11 +144,81 @@ export default function SpeakerView() {
     try {
       const id = `${sessionId}:${now}`;
       spacetime.reducers?.submitCaption?.(id, finalText);
+      // Keep a local copy so expand history works regardless of SpacetimeDB subscription state
+      setLocalCaptions(prev => [...prev.slice(-200), { id, text: finalText, ts: now }]);
       if (DEBUG) console.log('[PULSE][Phase3][Caption] submit', finalText.slice(0, 80));
     } catch (e) {
       if (DEBUG) console.log('[PULSE][Phase3][Caption] submit failed', String(e));
     }
-  }, [sessionId, sessionStarted, captionsEnabled, transcript.finalText, spacetime.reducers, DEBUG]);
+  }, [sessionId, sessionStarted, micEnabled, transcript.finalText, spacetime.reducers, DEBUG]);
+
+  // Every 60s, summarize the last 60s of captions via Gemini
+  useEffect(() => {
+    if (!sessionId || !sessionStarted || sessionEnded) return;
+
+    const runSummary = async () => {
+      try {
+        const now = Date.now();
+        const windowEnd = now;
+        const windowStart = now - 60_000;
+
+        const captions = (captionsRef.current || [])
+          .map((c: any) => ({
+            text: c.text,
+            ts: Number(c.created_at ?? 0),
+          }))
+          .filter(c => c.ts >= windowStart && c.ts <= windowEnd && c.text);
+
+        if (captions.length === 0) return;
+
+        const newestTs = Math.max(...captions.map(c => c.ts));
+        if (newestTs <= lastSummaryEndRef.current) return;
+
+        const transcriptText = captions
+          .sort((a, b) => a.ts - b.ts)
+          .map(c => c.text.trim())
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+
+        if (transcriptText.length < 40) return;
+
+        lastSummaryEndRef.current = windowEnd;
+
+        if (DEBUG) console.log('[PULSE][Phase4][Summary] window', {
+          sessionId,
+          chars: transcriptText.length,
+          windowStart,
+          windowEnd,
+        });
+
+        await fetch('/api/summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            windowStart,
+            windowEnd,
+            transcript: transcriptText,
+            signals: countsRef.current,
+          }),
+        });
+      } catch (e) {
+        if (DEBUG) console.log('[PULSE][Phase4][Summary] failed', String(e));
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      runSummary();
+      summaryTimerRef.current = setInterval(runSummary, 60_000);
+    }, 60_000);
+
+    return () => {
+      clearTimeout(timeoutId);
+      if (summaryTimerRef.current) clearInterval(summaryTimerRef.current);
+      summaryTimerRef.current = null;
+    };
+  }, [sessionId, sessionStarted, sessionEnded, DEBUG]);
 
   // SSE — live signal counts + floating reactions
   useEffect(() => {
@@ -266,7 +324,27 @@ export default function SpeakerView() {
     return () => { clearInterval(interval); };
   }, [sessionId, sessionStarted, sessionEnded, transcript]);
 
-  if (!mounted) return null;
+  useEffect(() => {
+    if (!sessionEnded || !sessionId) return;
+    setCaptionsExpanded(true);
+    setHistoryLoading(true);
+    fetch(`/api/transcript?sessionId=${sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        if (data.chunks?.length) {
+          setTranscriptHistory(
+            data.chunks
+              .filter((c: any) => c.text || c.preview)
+              .map((c: any) => ({ text: c.text || c.preview, startTs: c.startTs }))
+          );
+        } else if (data.fullText) {
+          setTranscriptHistory([{ text: data.fullText, startTs: 0 }]);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setHistoryLoading(false));
+  }, [sessionEnded, sessionId]);
 
   const roomState = getRoomState(counts);
   const cfg       = ROOM_CONFIG[roomState];
@@ -278,6 +356,17 @@ export default function SpeakerView() {
   const bottomText = dark ? 'text-white/20' : 'text-black/50';
   const bottomSub = dark ? 'text-white/30' : 'text-black/60';
   const aiPaused = Date.now() < aiPausedUntil;
+  const captionPanel = dark ? 'bg-white/5 border-white/10 text-white/80' : 'bg-black/5 border-black/10 text-black/70';
+  const captionMuted = dark ? 'text-white/40' : 'text-black/40';
+  // Merge SpacetimeDB captions with local buffer — local buffer is the source of truth
+  const captionHistory = (() => {
+    const stMap = new Map<string, { id: string; text: string; ts: number }>();
+    for (const c of (spacetime.captions || [])) {
+      stMap.set(c.id, { id: c.id, text: c.text, ts: Number(c.createdAt ?? 0) });
+    }
+    for (const c of localCaptions) stMap.set(c.id, c);
+    return [...stMap.values()].sort((a, b) => a.ts - b.ts).slice(-200);
+  })();
 
   return (
     <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${bg}`}>
@@ -422,6 +511,93 @@ export default function SpeakerView() {
         </div>
         <p className={`text-sm ${subText}`}>{cfg.sub}</p>
 
+        {(sessionStarted && captionsEnabled || sessionEnded) && (
+          <div className={`mt-6 w-full max-w-xl border rounded-2xl px-4 py-3 ${captionPanel}`}>
+            <div className="flex items-center justify-between gap-3">
+              <span className={`text-[11px] uppercase tracking-widest font-medium ${captionMuted}`}>
+                Live captions
+              </span>
+              <button
+                onClick={async () => {
+                  const next = !captionsExpanded;
+                  setCaptionsExpanded(next);
+                  if (next && sessionId) {
+                    setHistoryLoading(true);
+                    try {
+                      const res = await fetch(`/api/transcript?sessionId=${sessionId}`);
+                      if (res.ok) {
+                        const data = await res.json();
+                        // Use per-chunk data if available, else fall back to full text
+                        if (data.chunks?.length) {
+                          setTranscriptHistory(
+                            data.chunks
+                              .filter((c: any) => c.text || c.preview)
+                              .map((c: any) => ({ text: c.text || c.preview, startTs: c.startTs }))
+                          );
+                        } else if (data.fullText) {
+                          setTranscriptHistory([{ text: data.fullText, startTs: 0 }]);
+                        }
+                      }
+                    } catch {}
+                    setHistoryLoading(false);
+                  }
+                }}
+                className={`text-[10px] uppercase tracking-widest ${captionMuted} hover:opacity-80`}
+              >
+                {captionsExpanded ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            <div className="mt-2 text-sm">
+              {transcript.liveText || 'Listening…'}
+            </div>
+            {transcript.error && (
+              <div className="mt-2 text-[11px] text-red-400">
+                Transcription error: {transcript.error}. Toggle Mic to retry.
+              </div>
+            )}
+            {captionsExpanded && (
+              <div className={`mt-3 max-h-44 overflow-y-auto text-xs ${captionMuted}`}>
+                {historyLoading && (
+                  <div className="py-2 opacity-60">Loading…</div>
+                )}
+                {!historyLoading && transcriptHistory.length === 0 && captionHistory.length === 0 && (
+                  <div className="py-2">No captions yet.</div>
+                )}
+                {!historyLoading && transcriptHistory.length > 0 && (
+                  <>
+                    <div className="py-1 opacity-40 text-[10px] uppercase tracking-widest">Transcript history</div>
+                    {transcriptHistory.map((seg, i) => (
+                      <div key={i} className="py-1 border-b border-white/5 last:border-b-0">
+                        {seg.startTs > 0 && (
+                          <span className="opacity-60 mr-2">
+                            {new Date(seg.startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
+                        <span>{seg.text}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+                {!historyLoading && captionHistory.length > 0 && (
+                  <>
+                    <div className="py-1 opacity-40 text-[10px] uppercase tracking-widest mt-1">Live captions</div>
+                    {captionHistory.map((c: any) => {
+                      const ts = Number(c.ts ?? 0);
+                      const time = ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }) : '';
+                      return (
+                        <div key={c.id} className="py-1 border-b border-white/5 last:border-b-0">
+                          <span className="opacity-60">{time}</span>
+                          <span className="ml-2">{c.text}</span>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Signal cards — only shown when count > 0, colored by intensity */}
         {total > 0 && (
           <div className="flex flex-col items-center gap-2">
@@ -472,24 +648,6 @@ export default function SpeakerView() {
           </div>
         )}
       </div>
-
-      {/* Live captions */}
-      {sessionStarted && captionsEnabled && (
-        <div className={`px-6 pb-3 text-center text-sm ${bottomSub}`}>
-          {transcript.liveText || 'Listening…'}
-          {transcript.error && (
-            <div className="mt-1 text-[11px] text-red-400">
-              Speech error: {transcript.error}. Toggle Mic to retry.
-            </div>
-          )}
-        </div>
-      )}
-
-      {sessionStarted && (
-        <div className={`px-6 pb-2 text-center text-[11px] ${bottomSub}`}>
-          Audio chunk: {audioRecorder.lastFileId || 'waiting…'}
-        </div>
-      )}
 
       {/* Audience join link — bottom */}
       <div className="flex flex-col items-center gap-1 pb-6">

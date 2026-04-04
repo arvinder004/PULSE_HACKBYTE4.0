@@ -4,9 +4,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type TranscriptChunk = { text: string; ts: number };
 
+const DEEPGRAM_WS = 'wss://api.deepgram.com/v1/listen';
+
+function buildDeepgramUrl() {
+  const model = process.env.NEXT_PUBLIC_DEEPGRAM_MODEL ?? 'nova-2';
+  const language = process.env.NEXT_PUBLIC_DEEPGRAM_LANGUAGE ?? 'en-US';
+  const params = new URLSearchParams({
+    model,
+    language,
+    interim_results: 'true',
+    punctuate: 'true',
+    smart_format: 'true',
+    encoding: 'opus',
+    container: 'webm',
+    channels: '1',
+  });
+  return `${DEEPGRAM_WS}?${params.toString()}`;
+}
+
+
 /**
- * Rolling 60s transcript buffer using the Web Speech API.
- * Browsers typically require a user gesture to start recognition.
+ * Rolling 60s transcript buffer using Deepgram streaming STT.
+ * Requires NEXT_PUBLIC_DEEPGRAM_API_KEY to be set.
  */
 export default function useSpeechTranscript() {
   const [supported, setSupported] = useState(true);
@@ -15,23 +34,26 @@ export default function useSpeechTranscript() {
   const [finalText, setFinalText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const chunksRef = useRef<TranscriptChunk[]>([]);
-  const recognitionRef = useRef<any>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const listeningRef = useRef(false);
+  const wantListeningRef = useRef(false);
   const suspendedRef = useRef(false);
-  const errorCountRef = useRef(0);
+  const startRef = useRef<() => void>(() => {});
+  const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const envLoggedRef = useRef(false);
   const micProbeRef = useRef(false);
   const DEBUG = true;
 
   useEffect(() => {
-    const win = typeof window !== 'undefined' ? (window as any) : null;
     if (DEBUG && !envLoggedRef.current) {
       envLoggedRef.current = true;
       const conn = typeof navigator !== 'undefined' ? (navigator as any).connection : null;
-      console.log('[PULSE][Phase3][Transcript] env', {
-        secure: win?.isSecureContext,
-        protocol: win?.location?.protocol,
+      console.log('[PULSE][Phase4][Deepgram] env', {
+        secure: typeof window !== 'undefined' ? window.isSecureContext : undefined,
+        protocol: typeof window !== 'undefined' ? window.location?.protocol : undefined,
         online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
         ua: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
         connection: conn ? {
@@ -41,223 +63,176 @@ export default function useSpeechTranscript() {
           saveData: conn.saveData,
         } : undefined,
       });
-      try {
-        const perms = (navigator as any)?.permissions;
-        if (perms?.query) {
-          perms.query({ name: 'microphone' as PermissionName }).then((p: any) => {
-            console.log('[PULSE][Phase3][Transcript] mic permission', p?.state);
-            p.onchange = () => console.log('[PULSE][Phase3][Transcript] mic permission changed', p?.state);
-          }).catch(() => {
-            console.log('[PULSE][Phase3][Transcript] mic permission query failed');
-          });
-        }
-        const devicesApi = (navigator as any)?.mediaDevices;
-        if (devicesApi?.enumerateDevices) {
-          devicesApi.enumerateDevices().then((devices: MediaDeviceInfo[]) => {
-            const audioInputs = devices.filter(d => d.kind === 'audioinput');
-            console.log('[PULSE][Phase3][Transcript] audio inputs', {
-              count: audioInputs.length,
-              labels: audioInputs.map(d => d.label || 'unknown'),
-            });
-          }).catch(() => {
-            console.log('[PULSE][Phase3][Transcript] enumerateDevices failed');
-          });
-        }
-      } catch {
-        console.log('[PULSE][Phase3][Transcript] mic permission query failed');
-      }
     }
-    const SpeechRecognition = win?.webkitSpeechRecognition ?? win?.SpeechRecognition ?? null;
-    if (!SpeechRecognition) {
+
+    const hasMediaRecorder = typeof window !== 'undefined' && typeof MediaRecorder !== 'undefined';
+    if (!hasMediaRecorder || !navigator?.mediaDevices?.getUserMedia) {
       setSupported(false);
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] SpeechRecognition not supported');
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] MediaRecorder not supported');
       return;
     }
 
-    const r = new SpeechRecognition();
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = 'en-US';
-    if (DEBUG) console.log('[PULSE][Phase3][Transcript] init', {
-      continuous: r.continuous,
-      interimResults: r.interimResults,
-      lang: r.lang,
-    });
-
-    r.onstart = () => {
-      suspendedRef.current = false;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onstart', {
-        listening: listeningRef.current,
-        suspended: suspendedRef.current,
-        errors: errorCountRef.current,
-      });
-    };
-
-    r.onaudiostart = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onaudiostart');
-    };
-
-    r.onaudioend = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onaudioend');
-    };
-
-    r.onsoundstart = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onsoundstart');
-    };
-
-    r.onsoundend = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onsoundend');
-    };
-
-    r.onspeechstart = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onspeechstart');
-    };
-
-    r.onspeechend = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onspeechend');
-    };
-
-    r.onnomatch = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onnomatch');
-    };
-
-    r.onresult = (ev: any) => {
-      if (DEBUG) {
-        console.log('[PULSE][Phase3][Transcript] result', {
-          resultIndex: ev?.resultIndex,
-          results: ev?.results?.length,
-        });
-      }
-      const results = ev.results;
-      let final = '';
-      let interim = '';
-      for (let i = ev.resultIndex; i < results.length; i++) {
-        const res = results[i];
-        const text = res[0]?.transcript ?? '';
-        if (res.isFinal) final += text + ' ';
-        else interim += text + ' ';
-      }
-      if (final.trim()) {
-        chunksRef.current.push({ text: final.trim(), ts: Date.now() });
-        const cutoff = Date.now() - 60_000;
-        chunksRef.current = chunksRef.current.filter(c => c.ts >= cutoff);
-        setFinalText(final.trim());
-        if (DEBUG) console.log('[PULSE][Phase3][Transcript] final chunk', final.trim().slice(0, 80));
-      }
-      if ((final + interim).trim()) {
-        if (error) setError(null);
-        errorCountRef.current = 0;
-        setLiveText((final + interim).trim());
-      }
-    };
-
-    r.onerror = (ev: any) => {
-      const code = (ev?.error || ev?.message || 'unknown') as string;
-      if (!listeningRef.current || suspendedRef.current) {
-        if (DEBUG) console.log('[PULSE][Phase3][Transcript] error ignored (not listening)', code);
-        return;
-      }
-      // Only surface fatal errors to the UI — network blips are silent auto-retries
-      errorCountRef.current += 1;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] error', { code, count: errorCountRef.current });
-
-      // Fatal errors — mic permission denied, hardware missing, etc.
-      const fatal = ['not-allowed', 'service-not-allowed', 'not-supported', 'audio-capture', 'bad-grammar', 'language-not-supported'];
-      if (fatal.includes(code)) {
-        setError(code);
-        suspendedRef.current = true;
-        listeningRef.current = false;
-        setListening(false);
-        if (DEBUG) console.log('[PULSE][Phase3][Transcript] suspended due to fatal error');
-        return;
-      }
-
-      // Network / aborted errors — auto-retry silently, no UI error shown
-      // Gemini handles the real transcription so a Web Speech blip doesn't matter
-      const delay = Math.min(1000 * (2 ** Math.min(errorCountRef.current - 1, 4)), 10_000);
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      retryTimerRef.current = setTimeout(() => {
-        if (!listeningRef.current || suspendedRef.current) return;
-        errorCountRef.current = 0;
-        try { r.start(); } catch {}
-      }, delay);
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] silent retry in', delay, 'ms');
-    };
-
-    r.onend = () => {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] onend', {
-        listening: listeningRef.current,
-        suspended: suspendedRef.current,
-        errors: errorCountRef.current,
-      });
-      if (listeningRef.current && !suspendedRef.current) {
-        // Auto-restart to keep captions alive
-        if (retryTimerRef.current) return;
-        retryTimerRef.current = setTimeout(() => {
-          try { r.start(); } catch {}
-        }, 750);
-      }
-    };
-    recognitionRef.current = r;
-
     return () => {
-      try { recognitionRef.current?.stop?.(); } catch {}
-      recognitionRef.current = null;
+      try { recorderRef.current?.stop?.(); } catch {}
+      recorderRef.current = null;
+      try { socketRef.current?.close?.(); } catch {}
+      socketRef.current = null;
+      try { streamRef.current?.getTracks?.().forEach(t => t.stop()); } catch {}
+      streamRef.current = null;
     };
   }, []);
 
-  const start = useCallback(() => {
+  const scheduleReconnect = useCallback((reason: string) => {
+    if (!wantListeningRef.current || suspendedRef.current) return;
+    retryCountRef.current += 1;
+    const delay = Math.min(1000 * (2 ** Math.min(retryCountRef.current, 4)), 10_000);
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = setTimeout(() => {
+      if (!wantListeningRef.current || suspendedRef.current) return;
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] reconnect', { reason, delay });
+      startRef.current?.();
+    }, delay);
+  }, [DEBUG]);
+
+  const handleTranscript = useCallback((payload: any) => {
+    if (!payload) return;
+    if (payload.type && payload.type !== 'Results') return;
+    const alt = payload.channel?.alternatives?.[0];
+    const text = String(alt?.transcript || '').trim();
+    if (!text) return;
+
+    const isFinal = Boolean(payload.is_final || payload.speech_final);
+    if (isFinal) {
+      chunksRef.current.push({ text, ts: Date.now() });
+      const cutoff = Date.now() - 60_000;
+      chunksRef.current = chunksRef.current.filter(c => c.ts >= cutoff);
+      setFinalText(text);
+      setLiveText(text);
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] final', text.slice(0, 100));
+    } else {
+      setLiveText(text);
+    }
+  }, [DEBUG]);
+
+  const start = useCallback(async () => {
+    if (listeningRef.current) return;
+
+    wantListeningRef.current = true;
+
     try {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       suspendedRef.current = false;
+      retryCountRef.current = 0;
       setError(null);
-      errorCountRef.current = 0;
-      recognitionRef.current?.start?.();
-      setListening(true);
-      listeningRef.current = true;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] start', {
-        hasRecognizer: !!recognitionRef.current,
-        listening: listeningRef.current,
-      });
 
-      if (!micProbeRef.current && typeof navigator !== 'undefined') {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      if (!micProbeRef.current) {
         micProbeRef.current = true;
-        const mediaDevices = (navigator as any).mediaDevices;
-        if (mediaDevices?.getUserMedia) {
-          mediaDevices.getUserMedia({ audio: true }).then((stream: MediaStream) => {
-            const track = stream.getAudioTracks()[0];
-            console.log('[PULSE][Phase3][Transcript] mic probe ok', {
-              label: track?.label,
-              readyState: track?.readyState,
-              muted: track?.muted,
-              enabled: track?.enabled,
-              settings: track?.getSettings?.(),
-            });
-            stream.getTracks().forEach(t => t.stop());
-          }).catch((err: any) => {
-            console.log('[PULSE][Phase3][Transcript] mic probe failed', err?.name || err?.message || err);
-          });
-        }
+        const track = stream.getAudioTracks()[0];
+        if (DEBUG) console.log('[PULSE][Phase4][Deepgram] mic probe ok', {
+          label: track?.label,
+          readyState: track?.readyState,
+          muted: track?.muted,
+          enabled: track?.enabled,
+          settings: track?.getSettings?.(),
+        });
       }
-    } catch {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] start failed');
+
+      const apiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
+      if (!apiKey) {
+        setSupported(false);
+        setError('missing-deepgram-key');
+        return;
+      }
+      // Deepgram browser auth: pass key via Sec-WebSocket-Protocol header
+      // (custom Authorization headers are blocked by browsers on WebSocket)
+      const socket = new WebSocket(buildDeepgramUrl(), ['token', apiKey]);
+      socket.binaryType = 'arraybuffer';
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        let mimeType = 'audio/webm;codecs=opus';
+        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/webm';
+
+        const recorder = new MediaRecorder(stream, { mimeType });
+        recorderRef.current = recorder;
+
+        recorder.ondataavailable = async (ev) => {
+          if (!ev.data || ev.data.size === 0) return;
+          if (socket.readyState !== WebSocket.OPEN) return;
+          try {
+            const buf = await ev.data.arrayBuffer();
+            socket.send(buf);
+          } catch (e) {
+            if (DEBUG) console.log('[PULSE][Phase4][Deepgram] send error', String(e));
+          }
+        };
+
+        recorder.onerror = () => {
+          setError('media-recorder-error');
+          if (DEBUG) console.log('[PULSE][Phase4][Deepgram] MediaRecorder error');
+          scheduleReconnect('media-recorder');
+        };
+
+        recorder.start(250);
+        setListening(true);
+        listeningRef.current = true;
+        if (DEBUG) console.log('[PULSE][Phase4][Deepgram] socket open, recorder started', { mimeType });
+      };
+
+      socket.onmessage = async (ev) => {
+        try {
+          const raw = typeof ev.data === 'string'
+            ? ev.data
+            : (ev.data?.text ? await ev.data.text() : '');
+          if (!raw) return;
+          const payload = JSON.parse(raw);
+          handleTranscript(payload);
+        } catch (e) {
+          if (DEBUG) console.log('[PULSE][Phase4][Deepgram] message parse error', String(e));
+        }
+      };
+
+      socket.onerror = () => {
+        if (DEBUG) console.log('[PULSE][Phase4][Deepgram] socket error');
+      };
+
+      socket.onclose = (ev) => {
+        if (DEBUG) console.log('[PULSE][Phase4][Deepgram] socket closed', { code: ev.code, reason: ev.reason });
+        setListening(false);
+        listeningRef.current = false;
+        if (wantListeningRef.current && !suspendedRef.current) scheduleReconnect('socket-close');
+      };
+    } catch (e: any) {
+      setError(e?.name || e?.message || 'deepgram-start-failed');
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] start failed', e?.message || e);
     }
-  }, []);
+  }, [scheduleReconnect, handleTranscript, DEBUG]);
+
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
 
   const stop = useCallback(() => {
     try {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       suspendedRef.current = true;
-      recognitionRef.current?.stop?.();
+      wantListeningRef.current = false;
+      recorderRef.current?.stop?.();
+      recorderRef.current = null;
+      socketRef.current?.close?.();
+      socketRef.current = null;
+      streamRef.current?.getTracks?.().forEach(t => t.stop());
+      streamRef.current = null;
       setListening(false);
       listeningRef.current = false;
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] stop', {
-        listening: listeningRef.current,
-      });
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] stopped');
     } catch {
-      if (DEBUG) console.log('[PULSE][Phase3][Transcript] stop failed');
+      if (DEBUG) console.log('[PULSE][Phase4][Deepgram] stop failed');
     }
-  }, []);
+  }, [DEBUG]);
 
   const getLast60s = useCallback(() => {
     const cutoff = Date.now() - 60_000;
