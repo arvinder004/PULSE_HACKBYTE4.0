@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Define directories
+GIT_DIR="/home/ubuntu/pulse.git"
+TARGET_DIR="/home/ubuntu/pulse"
+
+# --- 1. Checkout latest code from the bare repo ---
+echo "Deploying latest code changes..."
+
+# Checkout backend files
+git --work-tree="${TARGET_DIR}" --git-dir="${GIT_DIR}" checkout --force main
+
+echo "Code deployed successfully."
+echo ""

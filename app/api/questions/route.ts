@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import Session from '@/lib/models/Session';
+import { runQuestionClassifier } from '@/lib/agents/runner';
+import { buildClassifierPrompt } from '@/lib/agents/question-classifier';
 
 type Question = {
   id: string;
@@ -171,7 +173,64 @@ export async function POST(req: NextRequest) {
   questions.set(id, newQ);
   cooldowns.set(cooldownKey, Date.now());
 
-  return NextResponse.json({ ok: true, id, isPrimary, merged: false });
+  // Persist to MongoDB asynchronously
+  connectDB().then(async () => {
+    await Session.updateOne(
+      { sessionId },
+      { $push: { questions: { id, text: text.trim(), audienceId, upvotes: 0, dismissed: false, answered: false, createdAt: new Date() } } }
+    );
+
+    // Agent 3: classify the question asynchronously (don't block response)
+    try {
+      const session = await Session.findOne({ sessionId }).lean() as any;
+      if (!session) return;
+
+      // Get existing questions for duplicate detection
+      const existingQs = (session.questions ?? [])
+        .filter((q: any) => q.id !== id)
+        .slice(-20)
+        .map((q: any) => ({ id: q.id, text: q.text, category: q.category, theme_tag: q.themeTag }));
+
+      // Get recent transcript from SegmentSummary
+      const SegmentSummary = (await import('@/lib/models/SegmentSummary')).default;
+      const recentSegments = await SegmentSummary.find({ sessionId })
+        .sort({ windowStart: -1 }).limit(2).lean();
+      const transcriptExcerpt = recentSegments.map((s: any) => s.transcript).reverse().join(' ').slice(0, 1500);
+
+      const userMessage = buildClassifierPrompt({
+        questionId:        id,
+        questionText:      text.trim(),
+        audienceId,
+        sessionTopic:      session.topic,
+        transcriptExcerpt,
+        existingQuestions: existingQs,
+      });
+
+      const classification = await runQuestionClassifier(userMessage);
+
+      // Persist classification back to the question
+      await Session.updateOne(
+        { sessionId, 'questions.id': id },
+        {
+          $set: {
+            'questions.$.relevant':             classification.relevant,
+            'questions.$.forwardToSuggester':   classification.forward_to_suggester,
+            'questions.$.category':             classification.category,
+            'questions.$.urgency':              classification.urgency,
+            'questions.$.themeTag':             classification.theme_tag,
+            'questions.$.duplicateOf':          classification.duplicate_of,
+            'questions.$.classificationReason': classification.reason,
+          },
+        }
+      );
+
+      console.log('[ArmorIQ][QuestionClassifier] classified', { sessionId, id, category: classification.category, urgency: classification.urgency, forward: classification.forward_to_suggester });
+    } catch (e) {
+      console.error('[ArmorIQ][QuestionClassifier] failed', String(e));
+    }
+  }).catch(err => console.error('[PULSE][Questions] MongoDB persist failed', err));
+
+  return NextResponse.json({ ok: true, id, isPrimary });
 }
 
 export async function GET(req: NextRequest) {

@@ -39,7 +39,7 @@ Built for HackByte 4.0 — SpacetimeDB track.
 - A Gemini API key ([get one here](https://aistudio.google.com))
 - A Deepgram API key ([get one here](https://deepgram.com))
 - An ElevenLabs API key ([get one here](https://elevenlabs.io))
-- SpacetimeDB CLI ([install here](https://spacetimedb.com/install))
+- SpacetimeDB CLI ([view here](https://spacetimedb.com/install)) Linux-> (`curl -sSf https://install.spacetimedb.com | sh`)
 
 ### Setup
 

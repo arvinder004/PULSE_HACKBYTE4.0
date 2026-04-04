@@ -13,7 +13,7 @@
     "stdb:logs": "spacetime logs"
   },
   "dependencies": {
-    "@clockworklabs/spacetimedb-sdk": "^1.3.3",
+    "@armoriq/sdk": "^0.2.10",
     "@elevenlabs/elevenlabs-js": "^2.41.1",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.2",

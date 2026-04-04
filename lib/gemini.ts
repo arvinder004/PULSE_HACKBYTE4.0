@@ -9,6 +9,9 @@ export type GeminiSegmentSummary = {
   summary: string;
   improvement: string;
   focusTags: string[];
+  paceAssessment?: string;
+  signalInsight?: string;
+  questionThemes?: string[];
   raw?: any;
 };
 
@@ -172,7 +175,11 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
     if (DEBUG) console.log('[PULSE][Phase3][Gemini] summary fallback (no API key)', { sessionId, transcriptLen: text.length });
     const confused = (counts?.confused ?? 0) || 0;
     const slowDown = (counts?.slow_down ?? 0) || 0;
-    const excited = (counts?.excited ?? 0) || 0;
+    const excited  = (counts?.excited  ?? 0) || 0;
+
+    const paceSignals = slowDown + excited;
+    const pacePct     = paceSignals === 0 ? 50 : Math.round((slowDown / paceSignals) * 100);
+    const paceLabel   = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
 
     let improvement = 'Keep the pace steady and reinforce the key point briefly.';
     let focusTags = ['clarity'];
@@ -191,23 +198,49 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
       summary: 'Short segment captured. Focus on delivery and clarity.',
       improvement,
       focusTags,
+      paceLabel,
+      pacePct,
       raw: { heuristic: true, counts },
-    };
+    } as any;
   }
+
+  // Derive pace context the same way the producer page does
+  const paceSignals = (counts?.slow_down ?? 0) + (counts?.excited ?? 0);
+  const pacePct     = paceSignals === 0 ? 50 : Math.round(((counts?.slow_down ?? 0) / paceSignals) * 100);
+  const paceLabel   = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
 
   try {
     const prompt = [
       'You are a speaking coach creating a MICRO improvement summary for the last 60 seconds.',
-      'Output ONLY valid JSON: {"summary": string<=200, "improvement": string<=160, "focus_tags": string[]<=4}.',
-      'This summary will be merged with other 60s summaries later, so keep it concise and self-contained.',
-      'Use signals and audience questions as context, but DO NOT judge the speaker based on audience chatter or audience and speaker conversation.',
-      'The transcript may include audience conversation or Q&A. Ignore that content and focus on the speaker\'s delivery (clarity, pacing, structure).',
-      'Be constructive and neutral. Avoid moral judgments or personal criticism.',
+      'The producer dashboard shows the following live data — your output must directly address each of these:',
+      '  • Room Pulse: signal counts for confused 😕, clear ✅, excited 🔥, slow_down 🐢, question ✋',
+      '  • Pace indicator: derived from slow_down vs excited signals (current reading: "' + paceLabel + '")',
+      '  • Audience questions: questions submitted by the audience during this segment',
+      '  • Signal totals: cumulative counts per signal type',
+      '',
+      'Output ONLY valid JSON with this exact shape:',
+      '{',
+      '  "summary": string,          // ≤200 chars — what happened in this segment',
+      '  "improvement": string,      // ≤160 chars — single most actionable coaching tip',
+      '  "focus_tags": string[],     // ≤4 tags drawn from: clarity, pacing, engagement, examples, recap, check-in, energy, structure',
+      '  "pace_assessment": string,  // ≤80 chars — interpret the pace signal for the producer',
+      '  "signal_insight": string,   // ≤120 chars — what the confused/clear/excited balance tells the speaker',
+      '  "question_themes": string[] // ≤3 short themes extracted from audience questions, empty array if none',
+      '}',
+      '',
+      'Rules:',
+      '- Base pace_assessment on the slow_down/excited ratio, not just the transcript.',
+      '- Base signal_insight on the confused vs clear vs excited counts.',
+      '- question_themes should reflect what the audience is actually asking about.',
+      '- Focus on the speaker\'s delivery (clarity, pacing, structure). Ignore audience chatter.',
+      '- Be constructive and neutral. No moral judgments.',
+      '',
       `Session: ${sessionId}`,
       `Speaker: ${speakerName || '(unknown)'}`,
       `Topic: ${topic || '(unknown)'}`,
       `Signals (last 60s): ${JSON.stringify(counts || {})}`,
-      `Audience Questions (top):\n${questionLines}`,
+      `Pace reading: ${paceLabel} (slow_down=${counts?.slow_down ?? 0}, excited=${counts?.excited ?? 0})`,
+      `Audience Questions:\n${questionLines}`,
       `Transcript (last 60s): ${text || '(none)'}`,
     ].join('\n');
 
@@ -249,9 +282,14 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
         ? (parsed.focus_tags || parsed.focusTags).map((t: any) => String(t)).slice(0, 4)
         : [];
       return {
-        summary: String(parsed.summary || parsed.sum || '').slice(0, 220),
-        improvement: String(parsed.improvement || parsed.tip || '').slice(0, 180),
-        focusTags: tags,
+        summary:          String(parsed.summary || parsed.sum || '').slice(0, 220),
+        improvement:      String(parsed.improvement || parsed.tip || '').slice(0, 180),
+        focusTags:        tags,
+        paceAssessment:   String(parsed.pace_assessment || parsed.paceAssessment || '').slice(0, 100),
+        signalInsight:    String(parsed.signal_insight || parsed.signalInsight || '').slice(0, 140),
+        questionThemes:   Array.isArray(parsed.question_themes || parsed.questionThemes)
+                            ? (parsed.question_themes || parsed.questionThemes).map(String).slice(0, 3)
+                            : [],
         raw: parsed,
       };
     } catch {
@@ -263,9 +301,14 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
             ? (parsed.focus_tags || parsed.focusTags).map((t: any) => String(t)).slice(0, 4)
             : [];
           return {
-            summary: String(parsed.summary || parsed.sum || '').slice(0, 220),
-            improvement: String(parsed.improvement || parsed.tip || '').slice(0, 180),
-            focusTags: tags,
+            summary:          String(parsed.summary || parsed.sum || '').slice(0, 220),
+            improvement:      String(parsed.improvement || parsed.tip || '').slice(0, 180),
+            focusTags:        tags,
+            paceAssessment:   String(parsed.pace_assessment || parsed.paceAssessment || '').slice(0, 100),
+            signalInsight:    String(parsed.signal_insight || parsed.signalInsight || '').slice(0, 140),
+            questionThemes:   Array.isArray(parsed.question_themes || parsed.questionThemes)
+                                ? (parsed.question_themes || parsed.questionThemes).map(String).slice(0, 3)
+                                : [],
             raw: parsed,
           };
         } catch {
@@ -274,9 +317,9 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
       }
 
       return {
-        summary: textResp.slice(0, 200),
-        improvement: '',
-        focusTags: [],
+        summary:       textResp.slice(0, 200),
+        improvement:   '',
+        focusTags:     [],
         raw: { text: textResp },
       };
     }
