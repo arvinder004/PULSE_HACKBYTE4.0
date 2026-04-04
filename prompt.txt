@@ -1,0 +1,4 @@
+Lets start by implementing armorIQ in our system so that the suggestioner ai agent can be implemented in the project.
+
+
+give me step by step guide through the armorIQ website on how to create the ai agent of summarizer. which will be triggered by a web hook and it will tool call our server to fetech the live transcripts from the segmentsummaries. and the 

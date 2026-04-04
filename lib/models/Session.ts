@@ -17,6 +17,14 @@ export interface IQuestion {
   dismissed: boolean;
   answered: boolean;
   createdAt: Date;
+  // Agent 3 classification
+  relevant?: boolean;
+  forwardToSuggester?: boolean;
+  category?: string;
+  urgency?: string;
+  themeTag?: string;
+  duplicateOf?: string | null;
+  classificationReason?: string;
 }
 
 export interface IIntervention {
@@ -62,6 +70,14 @@ const QuestionSchema = new Schema<IQuestion>({
   dismissed:  { type: Boolean, default: false },
   answered:   { type: Boolean, default: false },
   createdAt:  { type: Date, default: Date.now },
+  // Agent 3 classification
+  relevant:              { type: Boolean, default: null },
+  forwardToSuggester:    { type: Boolean, default: null },
+  category:              { type: String, default: null },
+  urgency:               { type: String, default: null },
+  themeTag:              { type: String, default: null },
+  duplicateOf:           { type: String, default: null },
+  classificationReason:  { type: String, default: null },
 }, { _id: false });
 
 const InterventionSchema = new Schema<IIntervention>({

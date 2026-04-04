@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import DashboardNav from '@/components/DashboardNav';
 import PulseVisualizer from '@/components/PulseVisualizer';
 import FloatingReactions, { type FloatingReaction } from '@/components/FloatingReactions';
+import SuggestionCard from '@/components/SuggestionCard';
 import { useSpacetimeSession } from '@/lib/useSpacetimeSession';
 import { useTheme } from '@/lib/useTheme';
 
@@ -88,31 +89,62 @@ export default function ProducerDashboard() {
   const params = useParams();
   const sessionId = params?.sessionId as string;
 
-  const [session, setSession] = useState<{ speakerName: string; topic: string } | null>(null);
+  const [session, setSession] = useState<{ speakerName: string; topic: string; active: boolean } | null>(null);
   const [tab, setTab] = useState<Tab>('ai');
   const { dark, setDark } = useTheme(true);
   const [mounted, setMounted] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({ confused: 0, clear: 0, question: 0, excited: 0, slow_down: 0 });
   const [audienceCount, setAudienceCount] = useState(0);
-  const [audioFiles, setAudioFiles] = useState<Array<{ id: string; filename: string; ts?: string | null }>>([]);
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
-  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; upvotes: number; mergedCount: number; ts: number; isPrimary: boolean }>>([]);
+  const [primaryQuestions, setPrimaryQuestions] = useState<Array<{ id: string; text: string; ts: number }>>([]);
+  const [mood, setMood] = useState<string | null>(null);
+  const [engagementBars, setEngagementBars] = useState<Array<{ wordCount: number }> | null>(null);
+  const [coachReport, setCoachReport] = useState<{
+    overallSummary: string;
+    topStrengths: string[];
+    topImprovements: string[];
+  } | null>(null);
+  const [archivedSuggestions, setArchivedSuggestions] = useState<Array<{
+    id: string; message: string; detail: string; urgency: string;
+    category: string; escalated: boolean; dismissed: boolean; createdAt: string;
+  }>>([]);
   const reactionId = useRef(0);
-  const DEBUG = true;
 
+  const isActive = session?.active ?? true; // assume active until we know otherwise
   const spacetime = useSpacetimeSession(sessionId);
 
   useEffect(() => { setMounted(true); }, []);
 
+  // Fetch session info (includes active flag)
   useEffect(() => {
     if (!sessionId) return;
     fetch(`/api/session?sessionId=${sessionId}`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic }));
+      .then(d => d && setSession({ speakerName: d.speakerName, topic: d.topic, active: d.active }));
   }, [sessionId]);
 
+  // ── ENDED SESSION: single fetch from MongoDB archive ──────────────────────
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || isActive) return;
+    fetch(`/api/session/archive?sessionId=${sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data) return;
+        setCounts(data.signalCounts ?? {});
+        setAudienceCount(Object.values(data.signalCounts ?? {}).reduce((a: number, b) => a + (b as number), 0));
+        setPrimaryQuestions(
+          (data.questions ?? []).map((q: any) => ({ id: q.id, text: q.text, ts: new Date(q.createdAt).getTime() }))
+        );
+        setMood(data.mood ?? null);
+        setEngagementBars(data.engagementBars ?? null);
+        setCoachReport(data.coachReport ?? null);
+        setArchivedSuggestions(data.suggestions ?? []);
+      });
+  }, [sessionId, isActive]);
+
+  // ── ACTIVE SESSION: SSE for real-time signal updates ──────────────────────
+  useEffect(() => {
+    if (!sessionId || !isActive) return;
     const es = new EventSource(`/api/signals?sessionId=${sessionId}&sse=1`);
     es.onmessage = (e) => {
       try {
@@ -123,8 +155,6 @@ export default function ProducerDashboard() {
           const key = msg.signal.signalType as string;
           setCounts(prev => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }));
           setAudienceCount(prev => prev + 1);
-
-          // Add floating reaction
           const emoji = SIGNAL_EMOJI[key as SignalKey];
           if (emoji) {
             const id = ++reactionId.current;
@@ -136,29 +166,11 @@ export default function ProducerDashboard() {
       } catch { /* ignore */ }
     };
     return () => es.close();
-  }, [sessionId]);
+  }, [sessionId, isActive]);
 
+  // ── ACTIVE SESSION: poll questions every 5s ───────────────────────────────
   useEffect(() => {
-    if (!sessionId) return;
-    let alive = true;
-    async function fetchAudio() {
-      try {
-        const res = await fetch(`/api/audio/list?sessionId=${sessionId}`);
-        const json = await res.json().catch(() => ({} as any));
-        if (alive) setAudioFiles(json.items || []);
-        if (DEBUG) console.log('[PULSE][Phase3][Audio] list', (json.items || []).length);
-      } catch (e) {
-        if (DEBUG) console.log('[PULSE][Phase3][Audio] list failed', String(e));
-      }
-    }
-    fetchAudio();
-    const id = setInterval(fetchAudio, 20_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [sessionId]);
-
-  // Poll all questions every 5s
-  useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !isActive) return;
     let alive = true;
     async function fetchQuestions() {
       try {
@@ -170,7 +182,7 @@ export default function ProducerDashboard() {
     fetchQuestions();
     const id = setInterval(fetchQuestions, 5_000);
     return () => { alive = false; clearInterval(id); };
-  }, [sessionId]);
+  }, [sessionId, isActive]);
 
   if (!mounted) return null;
 
@@ -181,11 +193,10 @@ export default function ProducerDashboard() {
   const pacePct     = paceSignals === 0 ? 50 : Math.round(((counts['slow_down'] ?? 0) / paceSignals) * 100);
   const paceLabel   = paceSignals < 3 ? 'Not enough signal' : pacePct > 65 ? 'Too fast — slow down' : pacePct < 35 ? 'Too slow — pick up the pace' : 'Good pace';
 
-  const latestCaption = [...(spacetime.captions || [])].sort((a: any, b: any) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0))[0];
-
   return (
     <div className={`min-h-screen flex flex-col select-none transition-colors duration-200 ${T.root}`}>
       <FloatingReactions reactions={reactions} />
+      {isActive && <SuggestionCard sessionId={sessionId} dark={dark} />}
 
       <DashboardNav
         sessionId={sessionId}
@@ -218,31 +229,12 @@ export default function ProducerDashboard() {
             </div>
           </div>
 
-          {/* Captions */}
-          <div className={`p-5 flex-none ${T.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Captions</p>
-            <div className={`mt-3 text-xs ${T.muted}`}>
-              {latestCaption?.text || 'No captions yet'}
-            </div>
-          </div>
-
-          {/* Audio chunks */}
-          <div className={`p-5 flex-none ${T.panel}`}>
-            <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Audio Chunks</p>
-            <div className={`mt-3 flex flex-col gap-2 text-[11px] ${T.muted}`}>
-              {audioFiles.length === 0 && <span>No audio yet</span>}
-              {audioFiles.slice(0, 5).map((f) => (
-                <span key={f.id} className="font-mono break-all">
-                  {f.filename}
-                </span>
-              ))}
-            </div>
-          </div>
-
           {/* Mood */}
           <div className={`p-5 flex-1 ${T.panel}`}>
             <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Mood</p>
-            <div className={`flex items-center justify-center h-24 text-xs ${T.muted}`}>No data yet</div>
+            <div className={`flex items-center justify-center h-24 text-sm font-medium ${T.muted}`}>
+              {mood ?? 'No data yet'}
+            </div>
           </div>
         </div>
 
@@ -257,7 +249,7 @@ export default function ProducerDashboard() {
                 <h1 className="text-xl font-semibold mt-1 leading-tight">{session?.topic ?? '—'}</h1>
                 <p className={`text-sm mt-1 ${T.sub}`}>{session?.speakerName ?? '—'}</p>
               </div>
-              <div className={`text-xs shrink-0 pt-1 ${T.muted}`}>Live</div>
+              <div className={`text-xs shrink-0 pt-1 ${T.muted}`}>{isActive ? 'Live' : 'Ended'}</div>
             </div>
             <div className="mt-5">
               <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Pace</p>
@@ -276,9 +268,14 @@ export default function ProducerDashboard() {
           <div className={`p-5 flex-none ${T.panel}`}>
             <p className={`text-[11px] uppercase tracking-widest font-medium ${T.label}`}>Engagement</p>
             <div className="flex items-end gap-px h-16 mt-3">
-              {BARS.map((b, i) => (
-                <div key={i} className={`flex-1 ${b.lit ? T.barLit : T.barDim}`} style={{ height: `${b.h}%` }} />
-              ))}
+              {(engagementBars && engagementBars.length > 0 ? engagementBars : BARS).map((b: any, i: number) => {
+                const maxWords = engagementBars ? Math.max(...engagementBars.map((x: any) => x.wordCount), 1) : 1;
+                const h = engagementBars ? Math.max(8, Math.round((b.wordCount / maxWords) * 100)) : b.h;
+                const lit = engagementBars ? b.wordCount > 0 : b.lit;
+                return (
+                  <div key={i} className={`flex-1 ${lit ? T.barLit : T.barDim}`} style={{ height: `${h}%` }} />
+                );
+              })}
             </div>
           </div>
 
@@ -297,7 +294,68 @@ export default function ProducerDashboard() {
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {tab === 'ai' && (
-                <p className={`text-sm text-center ${T.muted}`}>Watching the room. Will intervene when needed.</p>
+                isActive ? (
+                  <p className={`text-sm text-center ${T.muted}`}>Watching the room. Suggestions appear as cards above.</p>
+                ) : (
+                  <div className="flex flex-col gap-6">
+                    {/* Coach report */}
+                    {coachReport && (
+                      <div className="flex flex-col gap-4">
+                        <p className={`text-sm leading-relaxed ${T.sub}`}>{coachReport.overallSummary}</p>
+                        {coachReport.topStrengths.length > 0 && (
+                          <div>
+                            <p className={`text-[11px] uppercase tracking-widest font-medium mb-2 ${T.label}`}>Strengths</p>
+                            <ul className="flex flex-col gap-1">
+                              {coachReport.topStrengths.map((s, i) => (
+                                <li key={i} className={`text-sm ${T.sub}`}>· {s}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {coachReport.topImprovements.length > 0 && (
+                          <div>
+                            <p className={`text-[11px] uppercase tracking-widest font-medium mb-2 ${T.label}`}>To improve</p>
+                            <ul className="flex flex-col gap-1">
+                              {coachReport.topImprovements.map((s, i) => (
+                                <li key={i} className={`text-sm ${T.sub}`}>· {s}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* All suggestions from the session */}
+                    {archivedSuggestions.length > 0 && (
+                      <div>
+                        <p className={`text-[11px] uppercase tracking-widest font-medium mb-3 ${T.label}`}>
+                          Live suggestions ({archivedSuggestions.length})
+                        </p>
+                        <div className="flex flex-col gap-2">
+                          {archivedSuggestions.map(s => (
+                            <div key={s.id} className={`p-3 rounded-lg border text-sm ${
+                              dark ? 'border-white/8 bg-white/3' : 'border-black/8 bg-black/3'
+                            } ${s.dismissed ? 'opacity-40' : ''}`}>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`text-[10px] uppercase tracking-widest px-1.5 py-0.5 rounded-full border ${
+                                  s.urgency === 'urgent' ? 'border-red-400/60 text-red-400' :
+                                  s.urgency === 'medium' ? 'border-yellow-400/60 text-yellow-400' :
+                                  dark ? 'border-white/20 text-white/40' : 'border-black/20 text-black/40'
+                                }`}>{s.urgency}</span>
+                                <span className={`text-[10px] uppercase tracking-widest ${T.muted}`}>{s.category}</span>
+                                {s.escalated && <span className="text-[10px] text-red-400">↑ escalated</span>}
+                              </div>
+                              <p className={dark ? 'text-white/80' : 'text-black/80'}>{s.message}</p>
+                              {s.detail && <p className={`text-xs mt-0.5 ${T.muted}`}>{s.detail}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {!coachReport && archivedSuggestions.length === 0 && (
+                      <p className={`text-sm text-center ${T.muted}`}>No AI data yet — compile a coach report to see insights.</p>
+                    )}
+                  </div>
+                )
               )}
               {tab === 'questions' && (
                 <div className="flex flex-col gap-3">

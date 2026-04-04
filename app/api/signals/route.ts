@@ -86,6 +86,15 @@ export async function POST(req: NextRequest) {
 
   broadcast(sessionId, { type: 'signal', signal });
 
+  // Persist to MongoDB asynchronously (don't block response)
+  const signalId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  connectDB().then(() =>
+    Session.updateOne(
+      { sessionId },
+      { $push: { signals: { id: signalId, type: signalType, audienceId, fingerprint, weight: 1.0, createdAt: new Date() } } }
+    )
+  ).catch(err => console.error('[PULSE][Signals] MongoDB persist failed', err));
+
   // After 45s, broadcast a refreshed snapshot so all clients drop this signal
   setTimeout(() => {
     const counts = buildPrimaryCounts(sessionId);
