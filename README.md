@@ -40,7 +40,7 @@ Built for HackByte 4.0 — SpacetimeDB track.
 - Deepgram API key ([deepgram.com](https://deepgram.com))
 - ElevenLabs API key ([elevenlabs.io](https://elevenlabs.io))
 - MongoDB connection string
-- SpacetimeDB CLI ([spacetimedb.com/install](https://spacetimedb.com/install))
+- SpacetimeDB CLI ([spacetimedb.com/install](https://spacetimedb.com/install)) (Linux-> `curl -sSf https://install.spacetimedb.com | sh`)
 - ArmorIQ API key ([platform.armoriq.ai](https://platform.armoriq.ai)) — optional, enables security layer
 
 ### Setup
