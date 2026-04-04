@@ -118,35 +118,35 @@ export async function analyzeIntervention({ sessionId, transcript, signals }: An
 
     // Try to parse JSON directly
     try {
-      const parsed = JSON.parse(textResp);
+      // Strip markdown fences if present
+      const cleaned = textResp.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      const parsed = JSON.parse(cleaned);
       return {
-        message: String(parsed.message || parsed.msg || 'Intervention'),
+        message:   String(parsed.message || parsed.msg || 'Intervention'),
         suggestion: String(parsed.suggestion || parsed.s || ''),
         urgency: (parsed.urgency === 'high' ? 'high' : parsed.urgency === 'medium' ? 'medium' : 'low') as 'high' | 'medium' | 'low',
         raw: parsed,
       };
-    } catch (err) {
-      // If the LLM returned text, attempt to extract a JSON blob from it
+    } catch {
+      // Extract JSON blob from anywhere in the response
       const jsonMatch = textResp.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         try {
           const parsed = JSON.parse(jsonMatch[0]);
           return {
-            message: String(parsed.message || parsed.msg || 'Intervention'),
+            message:    String(parsed.message || parsed.msg || 'Intervention'),
             suggestion: String(parsed.suggestion || parsed.s || ''),
             urgency: (parsed.urgency === 'high' ? 'high' : parsed.urgency === 'medium' ? 'medium' : 'low') as 'high' | 'medium' | 'low',
             raw: parsed,
           };
-        } catch (e) {
+        } catch {
           // fallthrough
         }
       }
-
-      // Final fallback
       return {
-        message: 'Intervention suggested',
+        message:    'Intervention suggested',
         suggestion: textResp.slice(0, 160),
-        urgency: 'low',
+        urgency:    'low',
         raw: { text: textResp },
       };
     }
@@ -277,7 +277,8 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
     }
 
     try {
-      const parsed = JSON.parse(textResp);
+      const cleaned = textResp.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+      const parsed = JSON.parse(cleaned);
       const tags = Array.isArray(parsed.focus_tags || parsed.focusTags)
         ? (parsed.focus_tags || parsed.focusTags).map((t: any) => String(t)).slice(0, 4)
         : [];
@@ -315,11 +316,10 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
           // fallthrough
         }
       }
-
       return {
-        summary:       textResp.slice(0, 200),
-        improvement:   '',
-        focusTags:     [],
+        summary:     textResp.slice(0, 200),
+        improvement: '',
+        focusTags:   [],
         raw: { text: textResp },
       };
     }
@@ -477,7 +477,8 @@ export async function compileCoachReport({
     if (DEBUG) console.log('[PULSE][Coach] Gemini raw response length', textResp.length);
 
     const jsonMatch = textResp.match(/\{[\s\S]*\}/);
-    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(textResp);
+    const cleaned = textResp.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(cleaned);
 
     const segments: GeminiCoachSegment[] = (parsed.segments || []).map((s: any) => ({
       windowStart: Number(s.windowStart ?? 0),

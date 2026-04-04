@@ -32,7 +32,15 @@ export default function InterventionCard({ sessionId, dark = true }: { sessionId
             expiresAt:  Date.now() + AUTO_DISMISS_MS,
           };
           setCards(c => [itv, ...c].slice(0, 3));
-          setTimeout(() => setCards(c => c.filter(x => x.id !== itv.id)), AUTO_DISMISS_MS);
+          // Auto-dismiss AND auto-ack so server-side pending guard clears
+          setTimeout(() => {
+            setCards(c => c.filter(x => x.id !== itv.id));
+            fetch('/api/intervene/ack', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId, interventionId: itv.id }),
+            }).catch(() => {});
+          }, AUTO_DISMISS_MS);
         }
         if (msg.type === 'intervention_ack') {
           setCards(c => c.filter(x => x.id !== msg.interventionId));
@@ -66,6 +74,7 @@ export default function InterventionCard({ sessionId, dark = true }: { sessionId
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] uppercase tracking-widest text-white/30">AI Coach</span>
                 <span className={`text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full border ${
                   c.urgency === 'high'   ? 'border-red-400 text-red-400' :
                   c.urgency === 'medium' ? 'border-yellow-400 text-yellow-400' :

@@ -282,9 +282,22 @@ export default function SpeakerView() {
       .then(d => {
         if (!d) return;
         setSession({ speakerName: d.speakerName, topic: d.topic });
-        if (d.active === false) setSessionEnded(true);
+        if (d.active === false) {
+          setSessionEnded(true);
+        } else {
+          // Session is already active (e.g. navigated back from producer) — resume
+          setSessionStarted(true);
+          setCaptionsEnabled(true);
+          try {
+            transcript.start();
+            setMicEnabled(true);
+          } catch {
+            setMicEnabled(false);
+          }
+          if (DEBUG) console.log('[PULSE][Speaker] resumed active session', sessionId);
+        }
       });
-  }, [sessionId]);
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Push final captions into SpacetimeDB (throttled)
   useEffect(() => {
