@@ -1,12 +1,26 @@
 import type { NextConfig } from "next";
 
+const ALLOWED_ORIGINS = [
+  'https://pulse.venoms.app',
+  'http://localhost:3001',
+  process.env.NEXT_PUBLIC_APP_URL,
+].filter(Boolean) as string[];
+
 const nextConfig: NextConfig = {
   devIndicators: false,
-  // Allow phones on the local network to load the app without HMR errors
-  // HMR is dev-only and not needed on audience phones
-  experimental: {
-    // Turbopack HMR websocket — point to the actual server IP
-    // Read from env so you only need to update .env.local
+  experimental: {},
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin',      value: ALLOWED_ORIGINS.join(', ') },
+          { key: 'Access-Control-Allow-Methods',     value: 'GET, POST, PUT, PATCH, DELETE, OPTIONS' },
+          { key: 'Access-Control-Allow-Headers',     value: 'Content-Type, Authorization, X-API-Key' },
+          { key: 'Access-Control-Allow-Credentials', value: 'true' },
+        ],
+      },
+    ];
   },
 };
 
