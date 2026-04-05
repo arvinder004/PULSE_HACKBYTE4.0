@@ -1,6 +1,6 @@
 # PULSE — Architecture Plan
 
-Last updated: 2026-04-04
+Last updated: 2026-04-05
 
 ## Executive Summary
 
@@ -8,20 +8,22 @@ PULSE is a real-time, AI-assisted "room whisperer" for live talks.
 
 - Audience members send lightweight feedback (signals + questions) from their phones.
 - Speaker and producer dashboards receive near-real-time updates via **Server-Sent Events (SSE)**.
-- The system streams microphone audio to **Deepgram STT**, stores live captions in **SpacetimeDB** (with a local rolling buffer fallback), and rolls up a **60s caption summary** into MongoDB via Gemini.
-- Interventions are generated via **Gemini reasoning** when confusion/pacing signals cross thresholds.
-- After the session ends, a **Gemini coaching report** is compiled from all 60s segment summaries.
+- The speaker streams mic audio to **Deepgram STT**; final captions are pushed to **SpacetimeDB** and a local buffer, and also broadcast via `/api/captions`.
+- Every 60 seconds, the speaker posts a caption window to `/api/summary`; **Gemini** creates a `SegmentSummary` and triggers **Agent 2 (Suggester)** to persist a `Suggestion`.
+- Interventions are generated via **Gemini** in `/api/intervene`, with optional **ElevenLabs TTS** for high urgency; outputs are persisted to MongoDB + GridFS.
+- After the session ends, `/api/coach` compiles a **Gemini coaching report** from all segment summaries.
 
 The current implementation is:
 
-- **Next.js 16 (App Router)**: UI + API routes.
-- **MongoDB (Mongoose)**: durable documents — sessions, interventions, segment summaries, coach reports, users.
+- **Next.js 16.2.2 (App Router)**: UI + API routes.
+- **MongoDB (Mongoose)**: durable documents — sessions, interventions, segment summaries, coach reports, suggestions, users.
 - **GridFS**: durable audio blobs (TTS output, optional uploaded chunks).
-- **SSE + in-memory state**: real-time fanout for signals, questions, and intervention events.
-- **Gemini**: intervention reasoning, 60s segment summaries, transcript-grounded chat, coaching report compilation.
+- **SSE + in-memory state**: real-time fanout for signals, captions, suggestions, and intervention events.
+- **Gemini**: intervention reasoning, 60s segment summaries, transcript-grounded chat, coaching report compilation, Agent 2/3.
 - **Deepgram**: realtime speech-to-text for live captions.
 - **ElevenLabs**: TTS for high-urgency interventions (proxied via `/api/tts`).
-- **SpacetimeDB (present, optional)**: realtime module + generated client bindings; powers live caption storage and the 60s summary pipeline.
+- **SpacetimeDB (required for captions)**: realtime module + generated client bindings; stores caption rows and powers the 60s summary pipeline.
+- **ArmorIQ (scaffold only)**: SDK helper present, not wired into requests by default.
 
 Non-goals for this document: endpoints that do not exist under `app/api/`.
 
@@ -37,47 +39,55 @@ graph LR
 
   UI --> API[Next.js API Routes]
 
-  API --> Auth[/api/auth/*]
-  API --> SSE[/api/signals SSE fanout]
-  API --> Sess[/api/session + /api/session/primary]
-  API --> Summary[/api/summary]
-  API --> Transcript[/api/transcript]
-  API --> Audio[/api/audio/* optional]
-  API --> Chat[/api/chat]
-  API --> Intervene[/api/intervene]
-  API --> Coach[/api/coach]
-  API --> Questions[/api/questions]
-  API --> TTS[/api/tts]
+  API --> Auth["/api/auth/*"]
+  API --> Sess["/api/session/*"]
+  API --> SSE["/api/signals SSE stream"]
+  API --> Captions["/api/captions"]
+  API --> Questions["/api/questions"]
+  API --> Suggest["/api/suggest"]
+  API --> Intervene["/api/intervene"]
+  API --> Summary["/api/summary"]
+  API --> Transcript["/api/transcript"]
+  API --> Coach["/api/coach"]
+  API --> Chat["/api/chat"]
+  API --> Audio["/api/audio/* optional"]
+  API --> TTS["/api/tts"]
+  API --> DGToken["/api/deepgram-token"]
 
   Auth --> Mongo[(MongoDB)]
   Sess --> Mongo
   Intervene --> Mongo
   Summary --> Mongo
   Coach --> Mongo
+  Questions --> Mongo
+  Suggest --> Mongo
   Audio --> Mongo
 
   Audio --> GFS[(GridFS: audio + tts buckets)]
 
   UI --> Deepgram[Deepgram STT]
-  Chat --> Gemini[Gemini API]
+  Summary --> Gemini[Gemini API]
   Intervene --> Gemini
-  Summary --> Gemini
+  Suggest --> Gemini
+  Chat --> Gemini
   Coach --> Gemini
 
   TTS --> ElevenLabs[ElevenLabs TTS]
 
-  UI -. "WS (optional)" .-> STDB[(SpacetimeDB)]
+  UI -. "WS (captions)" .-> STDB[(SpacetimeDB)]
 ```
 
 ### What's true in code today
 
 - **Auth**: JWT stored in httpOnly cookie (`pulse_token`). Register/login/me/logout all implemented.
-- **Transcript source of truth**: client-side Deepgram captions stored in SpacetimeDB + local rolling buffer. Every 60 seconds, captions are summarized via `/api/summary` and persisted to MongoDB as `SegmentSummary`.
-- **Signals source of truth**: in-memory per Next.js process; clients subscribe via SSE (`/api/signals?sse=1`). Signals expire after 45s.
-- **Primary judge system**: one audience device can be designated "primary" via `?primary=1` URL param or `/api/session/primary`. Only primary signals count toward intervention thresholds.
-- **Questions**: in-memory, no moderation. Primary-only filter available for producer view.
-- **Interventions**: persisted to MongoDB inside the `Session` document. 90s server-side cooldown + pending-ack guard.
-- **Coach report**: compiled on session end from all `SegmentSummary` documents; stored in `CoachReport` collection.
+- **Captions**: Deepgram STT in the speaker client; final captions are pushed to SpacetimeDB, cached locally, and broadcast via `/api/captions` to SSE listeners. Every 60s, `/api/summary` persists a `SegmentSummary` and triggers Agent 2 (Suggester).
+- **Signals**: in-memory per Next.js process; clients subscribe via SSE (`/api/signals?sse=1`). Signals expire after 45s and are persisted asynchronously into `Session.signals`.
+- **Primary judge system**: one audience device can be designated "primary" via `?primary=1` or `/api/session/primary`. Primary-only counts are used for room state.
+- **Questions**: in-memory with cosine-similarity dedupe, 30s cooldown, and PATCH upvotes; persisted into `Session.questions` with Agent 3 classification metadata.
+- **Suggestions**: generated after each `/api/summary` call (Agent 2), stored in `Suggestion`, and broadcast via SSE. `/api/suggest` also supports run/list/dismiss with rate limiting.
+- **Interventions**: persisted to `Session.interventions`. 90s server-side cooldown + pending-ack guard. Optional ElevenLabs TTS stored in GridFS `tts`.
+- **Coach report**: compiled on demand via `/api/coach` from all `SegmentSummary` documents; cached in `CoachReport`.
+- **Audio uploads**: `/api/audio/upload` stores chunks in GridFS `audio` and creates `TranscriptChunk` documents. No server-side transcription is wired.
 
 ---
 
@@ -94,22 +104,26 @@ flowchart TB
     end
     subgraph API["API Routes (app/api/*)"]
       AuthAPI["auth: register / login / me"]
-      SessionAPI["session: create / get / start / end / primary"]
+      SessionAPI["session: create / get / start / end / archive / primary"]
       SignalsAPI["signals: POST + SSE GET + DELETE"]
-      QuestionsAPI["questions: POST + GET + DELETE"]
-      SummaryAPI["summary: 60s caption batches"]
+      CaptionsAPI["captions: POST + GET (SSE broadcast)"]
+      QuestionsAPI["questions: POST + GET + PATCH + DELETE"]
+      SuggestAPI["suggest: POST + GET + PATCH"]
+      SummaryAPI["summary: 60s caption batches + suggester"]
       TranscriptAPI["transcript: assemble from summaries"]
       AudioAPI["audio: upload / list (optional)"]
       InterveneAPI["intervene: POST + GET + ack"]
       CoachAPI["coach: POST compile + GET cached"]
       ChatAPI["chat: transcript-grounded Q&A"]
       TTSAPI["tts: ElevenLabs proxy"]
+      DeepgramAPI["deepgram-token: temp token"]
     end
   end
 
   subgraph Lib["Server/Shared Libs (lib/*)"]
     DB["db.ts (Mongo + GridFS)"]
-    Models["models/*\nSession, User, SegmentSummary,\nCoachReport, TranscriptChunk"]
+    Models["models/*\nSession, User, SegmentSummary,\nCoachReport, Suggestion,\nTranscriptChunk"]
+    Agents["agents/*\nSuggester + Question Classifier"]
     GeminiLib["gemini.ts\nanalyzeIntervention\nsummarizeSegment\ncompileCoachReport"]
     ElevenLabsLib["elevenlabs.ts\nsynthesizeSpeech"]
     AuthLib["jwt.ts"]
@@ -165,20 +179,31 @@ flowchart TB
   - `GET /api/session?sessionId=...` — fetch session info
   - `POST /api/session/start` — mark session active
   - `POST /api/session/end` — mark session ended; `reactivate: true` restarts it
+  - `GET /api/session/archive?sessionId=...` — fetch archived signals, questions, summaries, coach report
   - `GET /api/session/primary?sessionId=...` — get primary audienceId
   - `POST /api/session/primary` — set primary audienceId
 
 - **Signals (SSE)**
   - `POST /api/signals` — submit signal (10s rate limit per fingerprint)
-  - `GET /api/signals?sessionId=...&sse=1` — SSE stream (snapshot + signal + intervention events)
-  - `GET /api/signals?sessionId=...&snapshot=1` — raw signal array for client-side TTL filtering
+  - `GET /api/signals?sessionId=...&sse=1` — SSE stream (snapshot + signal + caption + suggestion + intervention events)
+  - `GET /api/signals?sessionId=...` — raw signals array for client-side filtering
   - `DELETE /api/signals?sessionId=...` — clear all signals, broadcast empty snapshot
 
+- **Captions (SSE broadcast)**
+  - `POST /api/captions` — push a final caption chunk into the in-memory buffer and SSE broadcast
+  - `GET /api/captions?sessionId=...` — return recent captions from memory
+
 - **Questions (in-memory)**
-  - `POST /api/questions` — submit question (30s cooldown)
+  - `POST /api/questions` — submit question (30s cooldown, similarity dedupe)
   - `GET /api/questions?sessionId=...&primaryOnly=1` — list questions, optional primary filter
+  - `PATCH /api/questions` — upvote by id
   - `DELETE /api/questions?id=...` — delete single question
   - `DELETE /api/questions?sessionId=...` — clear all questions for session
+
+- **Suggestions (Agent 2)**
+  - `POST /api/suggest` — run Suggester (rate limited, optional bearer token)
+  - `GET /api/suggest?sessionId=...` — list suggestions
+  - `PATCH /api/suggest` — dismiss a suggestion
 
 - **Interventions**
   - `POST /api/intervene` — Gemini reasoning; 90s cooldown + pending-ack guard; optional ElevenLabs TTS; persists to MongoDB; SSE broadcast
@@ -187,7 +212,7 @@ flowchart TB
 
 - **Captions + summaries**
   - Deepgram streaming in speaker client → captions stored in SpacetimeDB + local buffer
-  - `POST /api/summary` — summarize last 60s captions via Gemini → `SegmentSummary` in MongoDB
+  - `POST /api/summary` — summarize last 60s captions via Gemini → `SegmentSummary` in MongoDB + run Suggester
   - `GET /api/transcript?sessionId=...` — assemble full transcript from `SegmentSummary` documents
 
 - **Coach report**
@@ -201,8 +226,11 @@ flowchart TB
   - `POST /api/tts` — ElevenLabs proxy with in-memory LRU cache (20 entries)
 
 - **Audio (optional)**
-  - `POST /api/audio/upload` — store MediaRecorder chunk in GridFS
+  - `POST /api/audio/upload` — store MediaRecorder chunk in GridFS + create `TranscriptChunk`
   - `GET /api/audio/list?sessionId=...` — list uploaded chunks
+
+- **Deepgram token**
+  - `GET /api/deepgram-token` — short-lived Deepgram token (optional)
 
 ---
 
@@ -211,8 +239,10 @@ flowchart TB
 ```mermaid
 flowchart LR
   Client["Browsers\nSpeaker + Producer + Audience"] --> Signals["/api/signals\nSSE + POST + DELETE"]
+  Client --> Captions["/api/captions\nPOST + GET"]
   Client --> Session["/api/session + /api/auth"]
   Client --> Summary["/api/summary + /api/transcript"]
+  Client --> Suggest["/api/suggest"]
   Client --> Audio["/api/audio/upload (optional)"]
   Client --> Chat["/api/chat"]
   Client --> Intervene["/api/intervene + /ack"]
@@ -222,12 +252,14 @@ flowchart LR
   Client -. "WS" .-> Deepgram[Deepgram STT]
 
   Signals --> Mem[(In-memory signals\n+ SSE clients map)]
+  Captions --> CapMem[(In-memory captions)]
   Questions --> QMem[(In-memory questions)]
 
   Session --> Mongo[(MongoDB)]
   Intervene --> Mongo
   Summary --> Mongo
   Coach --> Mongo
+  Suggest --> Mongo
   Audio --> Mongo
 
   Audio --> GridFS[(GridFS audio + tts)]
@@ -259,6 +291,7 @@ sequenceDiagram
   API->>API: Check primary judge — isPrimary flag
   API->>Mem: Append signal (with TTL=45s)
   API-->>SSE: broadcast {type:"signal", signal}
+  Note over API: Async persist to Session.signals in MongoDB
   SSE-->>S: EventSource onmessage
   S-->>S: Update counts + ambient circle + floating reactions
   Note over API,SSE: After 45s: broadcast snapshot with fresh counts
@@ -295,8 +328,10 @@ sequenceDiagram
   participant DG as Deepgram STT
   participant ST as SpacetimeDB (captions)
   participant Buf as Local Rolling Buffer
+  participant Cap as POST /api/captions
   participant Sum as POST /api/summary
   participant Seg as SegmentSummary (Mongo)
+  participant Sug as Suggestion (Mongo)
   participant Gem as Gemini
   participant Coach as POST /api/coach
   participant CR as CoachReport (Mongo)
@@ -305,11 +340,15 @@ sequenceDiagram
   DG-->>Spk: Live transcripts (interim + final)
   Spk->>ST: submitCaption (final chunks)
   Spk->>Buf: Append to localCaptions ref
+  Spk->>Cap: Broadcast caption to SSE
   loop every 60s
     Spk->>Sum: windowStart + windowEnd + transcript (from localCaptions)
     Sum->>Gem: summarizeSegment
     Gem-->>Sum: {summary, improvement, focusTags}
     Sum->>Seg: Upsert SegmentSummary
+    Sum->>Gem: runSuggester
+    Gem-->>Sum: suggestion
+    Sum->>Sug: Insert Suggestion
   end
   Note over Spk: Session ends
   Spk->>Sum: Flush remaining captions
@@ -400,8 +439,33 @@ erDiagram
     date createdAt
   }
 
+  SUGGESTION {
+    string _id
+    string sessionId
+    string message
+    string detail
+    string urgency
+    string category
+    boolean dismissed
+    date createdAt
+  }
+
+  TRANSCRIPT_CHUNK {
+    string _id
+    string sessionId
+    number chunkIndex
+    number startTs
+    number endTs
+    string audioFileId
+    string audioFilename
+    string status
+    date createdAt
+  }
+
   SESSION ||--o{ SEGMENT_SUMMARY : has
   SESSION ||--o| COACH_REPORT : has
+  SESSION ||--o{ SUGGESTION : has
+  SESSION ||--o{ TRANSCRIPT_CHUNK : has
 ```
 
 ### In-Memory (ephemeral, per process)
@@ -411,8 +475,10 @@ erDiagram
 | `__pulse_signals` | global array | `Signal[]` | TTL 45s, cleared on DELETE |
 | `__pulse_sig_cooldowns` | `sessionId:fingerprint` | last signal timestamp | 10s cooldown |
 | `__pulse_sse_clients` | `sessionId` | `Set<ReadableStreamDefaultController>` | SSE fanout |
+| `__pulse_captions` | `sessionId` | `CaptionEntry[]` | last 100 captions per session |
 | `__pulse_primary` | `sessionId` | `primaryAudienceId` | cached from DB |
 | `__pulse_questions` | question id | `Question` | no TTL |
+| `__suggest_rl` | `sessionId` | rate limit window | /api/suggest rate limiting |
 | `__pulse_tts_cache` | `voiceId:text` | `Buffer` | LRU, max 20 |
 
 ### GridFS (durable blobs)
@@ -475,10 +541,10 @@ Full analytics for a co-presenter or backstage operator.
 │ /audience/…  │  Engagement: [static bar chart]               │
 │              │                                               │
 │ Captions     ├───────────────────────────────────────────────┤
-│ {latest}     │  [AI] [Questions] [Clarify] [Poll]            │
+│ {latest}     │  [AI] [Questions] [Poll]                      │
 │              │                                               │
-│ Audio Chunks │  Questions tab: primary-judge Q list          │
-│ {filenames}  │  with dismiss + clear-all                     │
+│ Audio Chunks │  Questions tab: Q list with                    │
+│ {filenames}  │  category + urgency metadata                  │
 │              │                                               │
 │ Mood         │                                               │
 │ No data yet  ├───────────────────────────────────────────────┤
@@ -522,11 +588,11 @@ Mobile-first, 3 tabs.
 
 ```mermaid
 graph LR
-  Device[Browsers] --> Next[Next.js 16 App\nUI + API]
+  Device[Browsers] --> Next[Next.js 16.2.2 App\nUI + API]
   Next --> Mongo[(MongoDB + GridFS)]
   Next --> Gemini[Gemini API]
   Next --> ElevenLabs[ElevenLabs TTS]
-  Next -. "WS (optional)" .-> STDB[(SpacetimeDB)]
+  Next -. "WS (captions)" .-> STDB[(SpacetimeDB)]
   Next -. "WS" .-> Deepgram[Deepgram STT]
 ```
 
@@ -534,16 +600,13 @@ graph LR
 
 ## Known Gaps (not yet implemented)
 
-- `/api/poll`, `/api/mood`, `/api/clarify` — not implemented; UI stubs only in producer dashboard.
-- ArmorIQ enforcement layer — not implemented.
-- Gemini content moderation for questions — questions are unmoderated.
-- QR code rendering — placeholder box in producer dashboard.
-- Engagement timeline — static decorative bars, not driven by real data.
+- `/api/poll` and `/api/mood` — not implemented; Spacetime reducers exist but no Next.js routes/UI wiring.
 - Horizontal scaling — in-memory SSE state and signals are per-process; not suitable for multi-instance deployment.
 
 ---
 
 ## Not Currently Used (present in repo)
 
-- **Audio chunk uploads**: `/api/audio/upload` and `/api/audio/list` exist; producer dashboard polls the list, but transcription is driven by Deepgram live captions, not uploaded audio.
+- **Audio chunk uploads**: `/api/audio/upload` and `/api/audio/list` exist; audio is stored in GridFS and `TranscriptChunk` is created, but no server-side transcription is wired.
+- **Gemini STT helper**: `lib/gemini-transcribe.ts` exists but is not called from API routes.
 - **SpacetimeDB as primary state**: SpacetimeDB is used for caption storage; signals and questions use in-memory state + SSE.

@@ -1,5 +1,7 @@
 # Demo Speech for AI Coaching Test
 
+Setup note: Use this script in the speaker view to exercise Deepgram captions and the /api/summary + /api/coach pipeline. Requires NEXT_PUBLIC_DEEPGRAM_API_KEY and GEMINI_API_KEY.
+
 ---
 
 **Topic: The Importance of Clear Communication**
