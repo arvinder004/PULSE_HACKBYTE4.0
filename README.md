@@ -10,6 +10,8 @@ Built for HackByte 4.0 — SpacetimeDB track.
 
 https://pulse.venoms.app
 
+SpacetimeDB Track video: [Demo.mp4](#file:Demo.mp4)
+
 ---
 
 ## What It Does
