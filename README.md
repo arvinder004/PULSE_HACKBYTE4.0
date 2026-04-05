@@ -6,6 +6,10 @@ PULSE is a real-time AI-powered audience intelligence system for live presentati
 
 Built for HackByte 4.0 — SpacetimeDB track.
 
+## Live Demo
+
+https://pulse.venoms.app
+
 ---
 
 ## What It Does
