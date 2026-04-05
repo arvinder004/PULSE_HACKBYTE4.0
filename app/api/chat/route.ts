@@ -5,9 +5,36 @@ import SegmentSummary from '@/lib/models/SegmentSummary';
 // 5s per-user cooldown
 const cooldowns = new Map<string, number>();
 const COOLDOWN_MS = 5_000;
+const GEMINI_TIMEOUT_MS = 15_000;
+const GEMINI_MAX_RETRIES = 2;
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRetryDelayMs(res: Response, attempt: number) {
+  const retryAfter = Number(res.headers.get('retry-after'));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, 10_000);
+  }
+  const base = 400 * (2 ** (attempt - 1));
+  return base + Math.floor(Math.random() * 200);
+}
 
 function isValidSessionId(id: string) {
   return /^[a-z0-9]{12}$/.test(id);
+}
+
+function fallbackAnswer(question: string, context: string) {
+  const q = question.toLowerCase();
+  const t = context.toLowerCase();
+  const words = q.split(/\s+/).filter(w => w.length > 4);
+  const matched = words.some(w => t.includes(w));
+  if (!matched || context.length < 30) {
+    return "That hasn't been covered in the talk yet.";
+  }
+  return "Based on the talk so far, the speaker touched on this topic. Enable Gemini for a detailed answer.";
 }
 
 async function askGemini(question: string, context: string): Promise<string> {
@@ -19,7 +46,7 @@ async function askGemini(question: string, context: string): Promise<string> {
     'You are given the full session context below, which includes a summary and raw transcript for each segment from the beginning of the talk.',
     'Answer the question using ONLY this context.',
     'If the answer is not in the context, respond with exactly: "That hasn\'t been covered in the talk yet."',
-    'Keep answers concise — 2–4 sentences max.',
+    'Keep answers concise — 2-4 sentences max.',
     'Do not make up information. Do not reference outside knowledge.',
     '',
     `SESSION CONTEXT:\n${context}`,
@@ -28,50 +55,65 @@ async function askGemini(question: string, context: string): Promise<string> {
   const userPrompt = `QUESTION: ${question}`;
 
   if (!apiKey) {
-    // Heuristic fallback — keyword match
-    const q = question.toLowerCase();
-    const t = context.toLowerCase();
-    const words = q.split(/\s+/).filter(w => w.length > 4);
-    const matched = words.some(w => t.includes(w));
-    if (!matched || context.length < 30) {
-      return "That hasn't been covered in the talk yet.";
-    }
-    return "Based on the talk so far, the speaker touched on this topic. Enable Gemini for a detailed answer.";
+    return fallbackAnswer(question, context);
   }
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const maxAttempts = GEMINI_MAX_RETRIES + 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [
+            { role: 'user', parts: [{ text: systemPrompt }] },
+            { role: 'model', parts: [{ text: 'Understood. I will only answer from the transcript.' }] },
+            { role: 'user', parts: [{ text: userPrompt }] },
+          ],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+        }),
+      });
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        await sleep(300 * attempt);
+        continue;
+      }
+      console.warn('[PULSE][Chat] Gemini request failed', String(err));
+      return fallbackAnswer(question, context);
+    } finally {
+      clearTimeout(timeout);
+    }
 
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        contents: [
-          { role: 'user', parts: [{ text: systemPrompt }] },
-          { role: 'model', parts: [{ text: 'Understood. I will only answer from the transcript.' }] },
-          { role: 'user', parts: [{ text: userPrompt }] },
-        ],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
-      }),
-    });
-  } finally {
-    clearTimeout(timeout);
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      if (RETRYABLE_STATUSES.has(res.status) && attempt < maxAttempts) {
+        await sleep(getRetryDelayMs(res, attempt));
+        continue;
+      }
+      if (RETRYABLE_STATUSES.has(res.status)) {
+        console.warn('[PULSE][Chat] Gemini rate limited', res.status, errBody.slice(0, 200));
+        return fallbackAnswer(question, context);
+      }
+      console.error('[PULSE][Chat] Gemini error', res.status, errBody);
+      throw new Error(`Gemini API error ${res.status}`);
+    }
+
+    const json = await res.json().catch(() => null) as any;
+    const answer = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
+    if (!answer.trim()) {
+      console.warn('[PULSE][Chat] Gemini empty response');
+      return fallbackAnswer(question, context);
+    }
+    return answer.trim();
   }
 
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '');
-    console.error('[PULSE][Chat] Gemini error', res.status, errBody);
-    throw new Error(`Gemini API error ${res.status}`);
-  }
-
-  const json = await res.json().catch(() => null) as any;
-  const answer = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
-  return answer.trim() || "That hasn't been covered in the talk yet.";
+  return fallbackAnswer(question, context);
 }
 
 export async function POST(req: NextRequest) {

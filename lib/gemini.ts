@@ -30,6 +30,52 @@ type SummaryArgs = {
   topic?: string;
 };
 
+const GEMINI_TIMEOUT_MS = 15_000;
+const GEMINI_MAX_RETRIES = 2;
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRetryDelayMs(res: Response, attempt: number) {
+  const retryAfter = Number(res.headers.get('retry-after'));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, 10_000);
+  }
+  const base = 400 * (2 ** (attempt - 1));
+  return base + Math.floor(Math.random() * 200);
+}
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  const maxAttempts = GEMINI_MAX_RETRIES + 1;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      if (!res.ok && RETRYABLE_STATUSES.has(res.status) && attempt < maxAttempts) {
+        await sleep(getRetryDelayMs(res, attempt));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        await sleep(300 * attempt);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw (lastError ?? new Error('Gemini request failed'));
+}
+
 /**
  * Analyze transcript + signals and return a short intervention suggestion.
  * Falls back to a lightweight heuristic when GEMINI_API_KEY is not configured.
@@ -87,7 +133,7 @@ export async function analyzeIntervention({ sessionId, transcript, signals }: An
     if (process.env.GEMINI_API_URL) {
       if (DEBUG) console.log('[PULSE][Phase3][Gemini] gateway call', { sessionId, transcriptLen: text.length });
       // Custom gateway mode
-      const res = await fetch(process.env.GEMINI_API_URL, {
+      const res = await fetchWithRetry(process.env.GEMINI_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -96,13 +142,16 @@ export async function analyzeIntervention({ sessionId, transcript, signals }: An
         body: JSON.stringify({ sessionId, transcript: text, signals: signals || {}, prompt }),
       });
       textResp = await res.text();
+      if (!res.ok) {
+        throw new Error(`Gemini gateway error ${res.status}: ${textResp.slice(0, 200)}`);
+      }
     } else {
       if (DEBUG) console.log('[PULSE][Phase3][Gemini] public API call', { sessionId, model: process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview' });
       // Public API mode
       const model = process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`;
 
-      const res = await fetch(url, {
+      const res = await fetchWithRetry(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -112,8 +161,16 @@ export async function analyzeIntervention({ sessionId, transcript, signals }: An
       });
 
       const apiJson = await res.json().catch(() => null) as any;
+      if (!res.ok) {
+        const message = apiJson?.error?.message ?? '';
+        throw new Error(`Gemini API error ${res.status}${message ? `: ${message}` : ''}`);
+      }
       const candidateText = apiJson?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
       textResp = candidateText || JSON.stringify(apiJson ?? {});
+    }
+
+    if (!textResp.trim()) {
+      throw new Error('Gemini returned empty response');
     }
 
     // Try to parse JSON directly
@@ -248,7 +305,7 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
 
     if (process.env.GEMINI_API_URL) {
       if (DEBUG) console.log('[PULSE][Phase3][Gemini] summary gateway call', { sessionId, transcriptLen: text.length });
-      const res = await fetch(process.env.GEMINI_API_URL, {
+      const res = await fetchWithRetry(process.env.GEMINI_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -257,12 +314,15 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
         body: JSON.stringify({ sessionId, transcript: text, signals: counts || {}, questions: questions || [], prompt }),
       });
       textResp = await res.text();
+      if (!res.ok) {
+        throw new Error(`Gemini gateway error ${res.status}: ${textResp.slice(0, 200)}`);
+      }
     } else {
       if (DEBUG) console.log('[PULSE][Phase3][Gemini] summary public API call', { sessionId, model: process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview' });
       const model = process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`;
 
-      const res = await fetch(url, {
+      const res = await fetchWithRetry(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -272,8 +332,16 @@ export async function summarizeSegment({ sessionId, transcript, signals, questio
       });
 
       const apiJson = await res.json().catch(() => null) as any;
+      if (!res.ok) {
+        const message = apiJson?.error?.message ?? '';
+        throw new Error(`Gemini API error ${res.status}${message ? `: ${message}` : ''}`);
+      }
       const candidateText = apiJson?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
       textResp = candidateText || JSON.stringify(apiJson ?? {});
+    }
+
+    if (!textResp.trim()) {
+      throw new Error('Gemini returned empty response');
     }
 
     try {
@@ -389,6 +457,19 @@ export async function compileCoachReport({
   batches: CoachBatch[];
 }): Promise<GeminiCoachReport> {
   const DEBUG = true;
+  const buildFallbackReport = (reason: string): GeminiCoachReport => ({
+    segments: batches.map(b => ({
+      windowStart: b.windowStart,
+      windowEnd: b.windowEnd,
+      timeLabel: msToTimeLabel(sessionStartMs, b.windowStart, b.windowEnd),
+      bullets: [b.improvement || b.summary || 'No data.'],
+      focusTags: b.focusTags,
+    })),
+    overallSummary: 'Could not generate full report — showing raw segment notes.',
+    topStrengths: [],
+    topImprovements: [],
+    raw: { error: reason },
+  });
 
   // Build time-labelled batch list for the prompt
   const batchLines = batches.map((b, i) => {
@@ -462,7 +543,7 @@ export async function compileCoachReport({
     const model = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY!)}`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -472,9 +553,18 @@ export async function compileCoachReport({
     });
 
     const apiJson = await res.json().catch(() => null) as any;
+    if (!res.ok) {
+      const message = apiJson?.error?.message ?? '';
+      throw new Error(`Gemini API error ${res.status}${message ? `: ${message}` : ''}`);
+    }
     const textResp = apiJson?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
 
     if (DEBUG) console.log('[PULSE][Coach] Gemini raw response length', textResp.length);
+
+    if (!textResp.trim()) {
+      if (DEBUG) console.log('[PULSE][Coach] Gemini empty response');
+      return buildFallbackReport('Gemini returned empty response');
+    }
 
     const jsonMatch = textResp.match(/\{[\s\S]*\}/);
     const cleaned = textResp.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
@@ -499,19 +589,6 @@ export async function compileCoachReport({
     };
   } catch (e) {
     if (DEBUG) console.log('[PULSE][Coach] Gemini error', String(e));
-    // Graceful fallback — use mini-batch data directly
-    return {
-      segments: batches.map(b => ({
-        windowStart: b.windowStart,
-        windowEnd: b.windowEnd,
-        timeLabel: msToTimeLabel(sessionStartMs, b.windowStart, b.windowEnd),
-        bullets: [b.improvement || b.summary || 'No data.'],
-        focusTags: b.focusTags,
-      })),
-      overallSummary: 'Could not generate full report — showing raw segment notes.',
-      topStrengths: [],
-      topImprovements: [],
-      raw: { error: String(e) },
-    };
+    return buildFallbackReport(String(e));
   }
 }

@@ -19,6 +19,22 @@ import { SUGGESTER_SYSTEM_PROMPT } from './suggester';
 import { QUESTION_CLASSIFIER_SYSTEM_PROMPT } from './question-classifier';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
+const GEMINI_TIMEOUT_MS = 15_000;
+const GEMINI_MAX_RETRIES = 2;
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRetryDelayMs(res: Response, attempt: number) {
+  const retryAfter = Number(res.headers.get('retry-after'));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, 10_000);
+  }
+  const base = 400 * (2 ** (attempt - 1));
+  return base + Math.floor(Math.random() * 200);
+}
 
 async function callGemini(systemPrompt: string, userMessage: string): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -26,21 +42,53 @@ async function callGemini(systemPrompt: string, userMessage: string): Promise<st
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        { role: 'user',  parts: [{ text: systemPrompt }] },
-        { role: 'model', parts: [{ text: 'Understood. Ready.' }] },
-        { role: 'user',  parts: [{ text: userMessage }] },
-      ],
-      generationConfig: { temperature: 0.2 },
-    }),
-  });
+  const maxAttempts = GEMINI_MAX_RETRIES + 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [
+            { role: 'user',  parts: [{ text: systemPrompt }] },
+            { role: 'model', parts: [{ text: 'Understood. Ready.' }] },
+            { role: 'user',  parts: [{ text: userMessage }] },
+          ],
+          generationConfig: { temperature: 0.2 },
+        }),
+      });
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        await sleep(300 * attempt);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
 
-  const json = await res.json().catch(() => null) as any;
-  return json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      if (RETRYABLE_STATUSES.has(res.status) && attempt < maxAttempts) {
+        await sleep(getRetryDelayMs(res, attempt));
+        continue;
+      }
+      throw new Error(`Gemini API error ${res.status}${errBody ? `: ${errBody.slice(0, 200)}` : ''}`);
+    }
+
+    const json = await res.json().catch(() => null) as any;
+    const text = json?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('') ?? '';
+    if (!text.trim()) {
+      throw new Error('Gemini returned empty response');
+    }
+    return text;
+  }
+
+  throw new Error('Gemini API error (retries exhausted)');
 }
 
 // ── Suggester (Agent 2) ───────────────────────────────────────────────────────
